@@ -1,11 +1,17 @@
-# --- Local tooling / editor workspace (kept out of the repo) ---
-.vscode/
-.serena/
-.mcp.json
-
 # --- Node / VS Code extension build artifacts ---
 node_modules/
 out/
 dist/
 *.vsix
 .vscode-test/
+
+# --- Local tooling (kept out of the repo) ---
+.serena/
+.mcp.json
+
+# --- .vscode: keep shared dev configs, ignore personal/workspace files ---
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+*.code-workspace
