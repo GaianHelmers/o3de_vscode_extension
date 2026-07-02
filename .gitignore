@@ -1,0 +1,11 @@
+# --- Local tooling / editor workspace (kept out of the repo) ---
+.vscode/
+.serena/
+.mcp.json
+
+# --- Node / VS Code extension build artifacts ---
+node_modules/
+out/
+dist/
+*.vsix
+.vscode-test/
