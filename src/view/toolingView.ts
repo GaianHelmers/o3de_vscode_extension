@@ -5,6 +5,7 @@
 //    Workspace/        Set Up O3DE Workspace…
 //    Build Options/    Generator / Config / Targets: <value>   (click → dropdown/picker)
 //    Build/            Build   Write Project Config…   Configure Project   Generate C++ IntelliSense
+//    Run/              Run   Stop   Run Target: <value>   Launch Options: <value>
 //    Prerequisites/    Check Visual Studio   Check Ninja
 //    Open Developer Terminal   Show Log      (standalone)
 //
@@ -15,6 +16,7 @@
 import * as vscode from "vscode";
 import { BuildOptions } from "../build/buildOptions";
 import { targetsLabel } from "../build/buildCommand";
+import { runSummary, launchArgsLabel } from "../build/runCommand";
 
 // ---- Model -----------------------------------------------------------------
 interface ActionNode {
@@ -125,6 +127,45 @@ function buildTree(options: BuildOptions): Node[] {
           command: "o3de.generateCppProperties",
           icon: "symbol-namespace",
           tooltip: "Parse the CMake File API → c_cpp_properties.json (engine paths resolve to the workspace source engine)",
+        },
+      ],
+    },
+    {
+      kind: "section",
+      label: "Run",
+      icon: "play-circle",
+      children: [
+        {
+          kind: "action",
+          label: "Run",
+          description: runSummary(options.runTarget, options.launchArgs),
+          command: "o3de.run",
+          icon: "play",
+          tooltip: "Launch the selected run target (detached). Use Stop to force-quit it and its child processes.",
+        },
+        {
+          kind: "action",
+          label: "Stop",
+          description: "force-quit",
+          command: "o3de.stopRun",
+          icon: "debug-stop",
+          tooltip: "Force-quit the running app and its whole process tree (Editor + AssetProcessor etc.)",
+        },
+        {
+          kind: "action",
+          label: "Run Target",
+          description: options.runTarget,
+          command: "o3de.selectRunTarget",
+          icon: "vm",
+          tooltip: "Choose what Run launches: Editor or the project's GameLauncher",
+        },
+        {
+          kind: "action",
+          label: "Launch Options",
+          description: launchArgsLabel(options.launchArgs),
+          command: "o3de.setLaunchArgs",
+          icon: "symbol-parameter",
+          tooltip: "Extra command-line args passed when running (e.g. +LoadLevel DefaultLevel +r_displayInfo 1)",
         },
       ],
     },

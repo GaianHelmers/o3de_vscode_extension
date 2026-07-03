@@ -20,13 +20,16 @@ import { writeProjectConfig } from "./build/writeProjectConfig";
 import { configureProject } from "./build/configure";
 import { buildProject } from "./build/build";
 import { selectTargets } from "./build/selectTargets";
+import { runProject, stopRun } from "./build/run";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
 import {
   BuildOptions,
   GENERATORS,
   BUILD_CONFIGS,
+  RUN_TARGETS,
   Generator,
   BuildConfig,
+  RunTarget,
 } from "./build/buildOptions";
 
 // ---- Activation ------------------------------------------------------------
@@ -93,6 +96,16 @@ export function activate(context: vscode.ExtensionContext): void {
     void buildProject(buildOptions);
   });
 
+  // Command: "O3DE: Run" — launch the selected run target (detached, tracked for force-quit).
+  const run = vscode.commands.registerCommand("o3de.run", () => {
+    void runProject(buildOptions);
+  });
+
+  // Command: "O3DE: Stop" — force-quit the running app + its process tree (or sweep orphans).
+  const stop = vscode.commands.registerCommand("o3de.stopRun", () => {
+    void stopRun();
+  });
+
   // Command: "O3DE: Generate C++ IntelliSense" — File API reply → <project>/.vscode/c_cpp_properties.json.
   const genCpp = vscode.commands.registerCommand("o3de.generateCppProperties", () => {
     void generateCppProperties(buildOptions);
@@ -121,6 +134,28 @@ export function activate(context: vscode.ExtensionContext): void {
   // Command: choose the CMake build target(s) — multi-select, File-API-sourced (shown in the tab, persisted).
   const selectTargetsCmd = vscode.commands.registerCommand("o3de.selectTargets", () => {
     void selectTargets(buildOptions);
+  });
+
+  // Commands: choose what Run launches + the launch options (shown in the tab, persisted).
+  const selectRunTarget = vscode.commands.registerCommand("o3de.selectRunTarget", async () => {
+    const pick = await vscode.window.showQuickPick(RUN_TARGETS, {
+      title: "O3DE: Run Target",
+      placeHolder: `Current: ${buildOptions.runTarget}`,
+    });
+    if (pick) {
+      await buildOptions.setRunTarget(pick as RunTarget);
+    }
+  });
+  const setLaunchArgs = vscode.commands.registerCommand("o3de.setLaunchArgs", async () => {
+    const value = await vscode.window.showInputBox({
+      title: "O3DE: Launch Options",
+      prompt: "Extra command-line args passed when running (blank to clear)",
+      placeHolder: "+LoadLevel DefaultLevel +r_displayInfo 1",
+      value: buildOptions.launchArgs,
+    });
+    if (value !== undefined) {
+      await buildOptions.setLaunchArgs(value.trim());
+    }
   });
 
   // Status-bar button — persistent, clickable proof the extension is alive.
@@ -157,10 +192,14 @@ export function activate(context: vscode.ExtensionContext): void {
     writeConfig,
     configure,
     build,
+    run,
+    stop,
     genCpp,
     selectGenerator,
     selectConfig,
     selectTargetsCmd,
+    selectRunTarget,
+    setLaunchArgs,
     toolingView,
     statusItem,
   );

@@ -92,6 +92,22 @@
         "title": "O3DE: Select Build Targets"
       },
       {
+        "command": "o3de.run",
+        "title": "O3DE: Run"
+      },
+      {
+        "command": "o3de.stopRun",
+        "title": "O3DE: Stop (Force-Quit)"
+      },
+      {
+        "command": "o3de.selectRunTarget",
+        "title": "O3DE: Select Run Target"
+      },
+      {
+        "command": "o3de.setLaunchArgs",
+        "title": "O3DE: Set Launch Options"
+      },
+      {
         "command": "o3de.generateCppProperties",
         "title": "O3DE: Generate C++ IntelliSense"
       },
