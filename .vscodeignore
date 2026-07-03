@@ -1,0 +1,16 @@
+# Files excluded from the packaged .vsix (ship only dist/ + manifest + docs).
+.vscode/**
+.vscode-test/**
+.vscode-test.mjs
+.serena/**
+.mcp.json
+src/**
+out/**
+node_modules/**
+.gitignore
+.git/**
+esbuild.js
+eslint.config.mjs
+tsconfig.json
+**/*.ts
+**/*.map

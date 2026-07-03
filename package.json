@@ -1,0 +1,117 @@
+{
+  "name": "o3de-development-tools",
+  "displayName": "O3DE Development Tools",
+  "description": "Developer companion for Open 3D Engine (O3DE) in Visual Studio Code.",
+  "version": "0.0.1",
+  "publisher": "GaianHelmers",
+  "license": "MIT",
+  "author": "Gaian Helmers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GaianHelmers/o3de_vscode_extension.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "o3de",
+          "title": "O3DE",
+          "icon": "media/o3de.svg"
+        }
+      ]
+    },
+    "views": {
+      "o3de": [
+        {
+          "id": "o3de.tooling",
+          "name": "Tooling"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "o3de.helloWorld",
+        "title": "O3DE: Hello World"
+      },
+      {
+        "command": "o3de.showLog",
+        "title": "O3DE: Show Log"
+      },
+      {
+        "command": "o3de.checkVisualStudio",
+        "title": "O3DE: Check Visual Studio"
+      },
+      {
+        "command": "o3de.openDeveloperTerminal",
+        "title": "O3DE: Open Developer Terminal"
+      },
+      {
+        "command": "o3de.checkNinja",
+        "title": "O3DE: Check Ninja"
+      },
+      {
+        "command": "o3de.setupWorkspace",
+        "title": "O3DE: Set Up Workspace…"
+      },
+      {
+        "command": "o3de.addGems",
+        "title": "O3DE: Add Gems / Folders…"
+      },
+      {
+        "command": "o3de.writeProjectConfig",
+        "title": "O3DE: Write Project Config"
+      },
+      {
+        "command": "o3de.configureProject",
+        "title": "O3DE: Configure Project"
+      },
+      {
+        "command": "o3de.generateCppProperties",
+        "title": "O3DE: Generate C++ IntelliSense"
+      },
+      {
+        "command": "o3de.selectGenerator",
+        "title": "O3DE: Select CMake Generator"
+      },
+      {
+        "command": "o3de.selectConfig",
+        "title": "O3DE: Select Build Configuration"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "compile-tests": "tsc -p . --outDir out",
+    "pretest": "npm run compile-tests && npm run compile",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^9.9.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
