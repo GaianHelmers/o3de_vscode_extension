@@ -16,6 +16,7 @@ export const BUILD_CONFIGS: BuildConfig[] = ["profile", "debug", "release"];
 
 const KEY_GENERATOR = "o3de.build.generator";
 const KEY_CONFIG = "o3de.build.config";
+const KEY_TARGETS = "o3de.build.targets";
 
 export class BuildOptions {
   private readonly changed = new vscode.EventEmitter<void>();
@@ -32,6 +33,12 @@ export class BuildOptions {
     return this.state.get<BuildConfig>(KEY_CONFIG) ?? "profile";
   }
 
+  /** CMake target(s) the Build command builds. Empty = build everything (no --target). */
+  get targets(): string[] {
+    const stored = this.state.get<string[]>(KEY_TARGETS);
+    return Array.isArray(stored) ? stored : [];
+  }
+
   async setGenerator(value: Generator): Promise<void> {
     await this.state.update(KEY_GENERATOR, value);
     this.changed.fire();
@@ -39,6 +46,11 @@ export class BuildOptions {
 
   async setConfig(value: BuildConfig): Promise<void> {
     await this.state.update(KEY_CONFIG, value);
+    this.changed.fire();
+  }
+
+  async setTargets(value: string[]): Promise<void> {
+    await this.state.update(KEY_TARGETS, value);
     this.changed.fire();
   }
 

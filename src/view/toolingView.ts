@@ -3,8 +3,8 @@
 //
 //  Structure:
 //    Workspace/        Set Up O3DE Workspace…
-//    Build Options/    Generator: <value>   Config: <value>   (click → dropdown)
-//    Build/            Write Project Config…   Configure Project   Generate C++ IntelliSense
+//    Build Options/    Generator / Config / Targets: <value>   (click → dropdown/picker)
+//    Build/            Build   Write Project Config…   Configure Project   Generate C++ IntelliSense
 //    Prerequisites/    Check Visual Studio   Check Ninja
 //    Open Developer Terminal   Show Log      (standalone)
 //
@@ -14,6 +14,7 @@
 
 import * as vscode from "vscode";
 import { BuildOptions } from "../build/buildOptions";
+import { targetsLabel } from "../build/buildCommand";
 
 // ---- Model -----------------------------------------------------------------
 interface ActionNode {
@@ -79,6 +80,15 @@ function buildTree(options: BuildOptions): Node[] {
           icon: "symbol-enum",
           tooltip: "Choose the build configuration (profile / debug / release)",
         },
+        {
+          kind: "action",
+          label: "Targets",
+          description: targetsLabel(options.targets),
+          command: "o3de.selectTargets",
+          icon: "list-tree",
+          tooltip:
+            "Choose which CMake target(s) Build compiles (Editor, GameLauncher, a feature…). Select none = build everything.",
+        },
       ],
     },
     {
@@ -88,10 +98,19 @@ function buildTree(options: BuildOptions): Node[] {
       children: [
         {
           kind: "action",
+          label: "Build",
+          description: `${targetsLabel(options.targets)} · ${options.config}`,
+          command: "o3de.build",
+          icon: "run-all",
+          tooltip:
+            "Build the selected target(s) with the current config — MSVC env + process-guard (mirrors your build .bat)",
+        },
+        {
+          kind: "action",
           label: "Write Project Config (.vscode)",
           command: "o3de.writeProjectConfig",
           icon: "settings-gear",
-          tooltip: "Generate/merge O3DE CMake + C++ settings into the project's .vscode/settings.json",
+          tooltip: "Materialize .vscode: settings.json + launch.json (Editor/GameLauncher/Attach/ClassWizard) + O3DE snippets",
         },
         {
           kind: "action",

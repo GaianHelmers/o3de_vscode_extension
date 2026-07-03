@@ -13,6 +13,7 @@ import { normalizePath } from "./paths";
 export interface ConsolidatedCompile {
   includes: IncludeEntry[]; // normalized paths, deduped, first-seen order
   defines: string[]; // deduped, first-seen order
+  forcedIncludes: string[]; // normalized paths, deduped, first-seen order
   standard?: string; // first C++ standard seen
 }
 
@@ -22,6 +23,8 @@ export function consolidateTargets(targets: TargetCompile[]): ConsolidatedCompil
   const seenInclude = new Set<string>();
   const defines: string[] = [];
   const seenDefine = new Set<string>();
+  const forcedIncludes: string[] = [];
+  const seenForced = new Set<string>();
   let standard: string | undefined;
 
   for (const target of targets) {
@@ -39,9 +42,17 @@ export function consolidateTargets(targets: TargetCompile[]): ConsolidatedCompil
         defines.push(def);
       }
     }
+    for (const forced of target.forcedIncludes) {
+      const normalized = normalizePath(forced);
+      const key = normalized.toLowerCase();
+      if (!seenForced.has(key)) {
+        seenForced.add(key);
+        forcedIncludes.push(normalized);
+      }
+    }
     if (!standard && target.standard) {
       standard = target.standard;
     }
   }
-  return { includes, defines, standard };
+  return { includes, defines, forcedIncludes, standard };
 }

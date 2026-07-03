@@ -18,7 +18,9 @@ import { ToolingViewProvider } from "./view/toolingView";
 import { runSetupWizard, addGemsToWorkspace } from "./workspace/setupWizard";
 import { writeProjectConfig } from "./build/writeProjectConfig";
 import { configureProject } from "./build/configure";
-import { generateCppProperties } from "./intellisense/generate";
+import { buildProject } from "./build/build";
+import { selectTargets } from "./build/selectTargets";
+import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
 import {
   BuildOptions,
   GENERATORS,
@@ -86,6 +88,11 @@ export function activate(context: vscode.ExtensionContext): void {
     void configureProject(buildOptions);
   });
 
+  // Command: "O3DE: Build" — cmake --build for the selected target(s) + config (MSVC env + process-guard).
+  const build = vscode.commands.registerCommand("o3de.build", () => {
+    void buildProject(buildOptions);
+  });
+
   // Command: "O3DE: Generate C++ IntelliSense" — File API reply → <project>/.vscode/c_cpp_properties.json.
   const genCpp = vscode.commands.registerCommand("o3de.generateCppProperties", () => {
     void generateCppProperties(buildOptions);
@@ -111,6 +118,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // Command: choose the CMake build target(s) — multi-select, File-API-sourced (shown in the tab, persisted).
+  const selectTargetsCmd = vscode.commands.registerCommand("o3de.selectTargets", () => {
+    void selectTargets(buildOptions);
+  });
+
   // Status-bar button — persistent, clickable proof the extension is alive.
   const statusItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -127,6 +139,12 @@ export function activate(context: vscode.ExtensionContext): void {
     new ToolingViewProvider(buildOptions),
   );
 
+  // Low-cost IntelliSense refresh on startup (setting-gated): re-emit c_cpp_properties.json from the
+  // existing File API reply so it tracks the last configure — no cmake reconfigure.
+  if (vscode.workspace.getConfiguration("o3de").get<boolean>("intellisense.autoRefreshOnStartup", true)) {
+    void refreshCppPropertiesOnStartup(buildOptions);
+  }
+
   context.subscriptions.push(
     buildOptions,
     helloWorld,
@@ -138,9 +156,11 @@ export function activate(context: vscode.ExtensionContext): void {
     addGems,
     writeConfig,
     configure,
+    build,
     genCpp,
     selectGenerator,
     selectConfig,
+    selectTargetsCmd,
     toolingView,
     statusItem,
   );

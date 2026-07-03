@@ -12,6 +12,7 @@ export interface CppConfigInput {
   name: string;
   includePath: string[];
   defines: string[];
+  forcedInclude?: string[]; // headers force-included on every TU (O3DE's VSCompat.h)
   compilerPath?: string;
   standard?: string; // File API digits, e.g. "20" | "17"
 }
@@ -27,6 +28,9 @@ export function buildCppConfiguration(input: CppConfigInput): Record<string, unk
     name: input.name,
     includePath: input.includePath,
     defines: input.defines,
+    ...(input.forcedInclude && input.forcedInclude.length
+      ? { forcedInclude: input.forcedInclude }
+      : {}),
     ...(input.compilerPath ? { compilerPath: input.compilerPath } : {}),
     cStandard: "c17",
     cppStandard: cppStandardFromApi(input.standard),

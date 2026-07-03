@@ -22,6 +22,7 @@ export interface IncludeEntry {
 export interface TargetCompile {
   includes: IncludeEntry[]; // from compileGroups[].includes + external:I fragments
   defines: string[]; // e.g. AZ_ENABLE_TRACING, WIN64, _HAS_EXCEPTIONS=0
+  forcedIncludes: string[]; // /FI<path> (O3DE forces VSCompat.h) → cpptools forcedInclude
   standard?: string; // C++ standard digits, e.g. "20"
 }
 
@@ -69,19 +70,34 @@ export function extractFragmentIncludes(fragments: { fragment: string }[]): stri
   return out;
 }
 
-/** Extract include paths / defines / C++ standard from a target's compileGroups. */
+/** Pull forced includes (MSVC `/FI<path>`) — usually O3DE's VSCompat.h — from the flag fragments.
+ *  These live INSIDE the combined-flags fragment, not as standalone tokens, so scan the string. */
+export function extractForcedIncludes(fragments: { fragment: string }[]): string[] {
+  const out: string[] = [];
+  for (const { fragment } of fragments) {
+    for (const match of fragment.matchAll(/[-/]FI\s*("[^"]+"|\S+)/g)) {
+      out.push(match[1].replace(/^"|"$/g, ""));
+    }
+  }
+  return out;
+}
+
+/** Extract include paths / defines / forced includes / C++ standard from a target's compileGroups. */
 export function parseTarget(json: TargetJson): TargetCompile {
   const includes: IncludeEntry[] = [];
   const defines: string[] = [];
+  const forcedIncludes: string[] = [];
   let standard: string | undefined;
 
   for (const group of json.compileGroups ?? []) {
     for (const inc of group.includes ?? []) {
       includes.push({ path: inc.path, isSystem: inc.isSystem });
     }
-    for (const ext of extractFragmentIncludes(group.compileCommandFragments ?? [])) {
+    const fragments = group.compileCommandFragments ?? [];
+    for (const ext of extractFragmentIncludes(fragments)) {
       includes.push({ path: ext, isSystem: true }); // 3rd-party → treat as system
     }
+    forcedIncludes.push(...extractForcedIncludes(fragments));
     for (const def of group.defines ?? []) {
       defines.push(def.define);
     }
@@ -89,7 +105,7 @@ export function parseTarget(json: TargetJson): TargetCompile {
       standard = group.languageStandard.standard;
     }
   }
-  return { includes, defines, standard };
+  return { includes, defines, forcedIncludes, standard };
 }
 
 /** The CXX compiler path (cl.exe) from the toolchains reply. */
@@ -107,6 +123,23 @@ export function pickConfiguration(
   const match =
     configs.find((c) => c.name.toLowerCase() === configName.toLowerCase()) ?? configs[0];
   return match ? { name: match.name, targets: match.targets ?? [] } : undefined;
+}
+
+/** The buildable target names for a config, de-duplicated in codemodel order (drives the picker). */
+export function parseTargetNames(json: CodemodelJson, configName: string): string[] {
+  const config = pickConfiguration(json, configName);
+  if (!config) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const { name } of config.targets) {
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 // ---- I/O loader ------------------------------------------------------------
@@ -163,4 +196,22 @@ export function loadFileApiReply(replyDir: string, configName: string): FileApiR
     : undefined;
 
   return { configName: config.name, compilerPath, targets };
+}
+
+/**
+ * Just the buildable target names from a reply — reads only the index + codemodel
+ * (not every per-target file), so it's cheap enough to run when opening the picker.
+ */
+export function loadTargetNames(replyDir: string, configName: string): string[] {
+  const indexFile = latestIndexFile(replyDir);
+  if (!indexFile) {
+    return [];
+  }
+  const index = readJson<IndexJson>(indexFile);
+  const codemodelName = (index?.objects ?? []).find((o) => o.kind === "codemodel")?.jsonFile;
+  if (!codemodelName) {
+    return [];
+  }
+  const codemodel = readJson<CodemodelJson>(path.join(replyDir, codemodelName));
+  return codemodel ? parseTargetNames(codemodel, configName) : [];
 }

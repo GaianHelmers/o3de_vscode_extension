@@ -1,12 +1,14 @@
 // ============================================================================
-//  Project config writer — generate + merge O3DE settings into
-//  <project>/.vscode/settings.json (workspace_setup A.3 / build_launch B.1).
+//  Project config writer — materialize <project>/.vscode from detection.
 //
-//  `writeProjectSettings` is the reusable core (used by both the standalone
-//  command and the setup wizard). Values come from detection (3rd-party path
-//  from the manifest, parallel jobs from CPU count, platform) + the current
-//  BuildOptions (generator / config). Existing settings are merged JSONC-
-//  tolerantly so user config is never clobbered.
+//  `writeProjectSettings` is the reusable core (settings.json; used by both the
+//  standalone command and the setup wizard). Values come from detection (3rd-party
+//  path from the manifest, parallel jobs from CPU count, platform) + the current
+//  BuildOptions (generator / config). Existing settings are merged JSONC-tolerantly
+//  so user config is never clobbered.
+//
+//  The COMMAND (writeProjectConfig) also emits launch.json (O3DE debug/run targets)
+//  and deploys the O3DE code snippets — one action to wire up the whole workspace.
 // ============================================================================
 
 import * as vscode from "vscode";
@@ -21,6 +23,8 @@ import { buildProjectSettings, mergeSettings } from "./vscodeConfig";
 import { BuildOptions } from "./buildOptions";
 import { platformBuildDir } from "./configureCommand";
 import { resolveWorkspaceProject } from "./projectResolve";
+import { writeLaunchConfig } from "./launchGenerate";
+import { writeSnippetsIfAbsent } from "./snippets";
 
 // ---- Core: write <project>/.vscode/settings.json (reusable) ----------------
 /** Returns the settings.json path on success, or undefined if not written. */
@@ -75,16 +79,27 @@ export async function writeProjectSettings(
   return settingsPath;
 }
 
-// ---- Command: resolve project from workspace, then write -------------------
+// ---- Command: resolve project, then write settings + launch + snippets -----
 export async function writeProjectConfig(options: BuildOptions): Promise<void> {
   const project = await resolveWorkspaceProject("O3DE: Write Project Config");
   if (!project) {
     return;
   }
   const settingsPath = await writeProjectSettings(project, options);
-  if (settingsPath) {
-    void vscode.window.showInformationMessage(
-      `O3DE: project settings written to ${project.projectName}/.vscode/settings.json`,
-    );
+  if (!settingsPath) {
+    return; // writeProjectSettings already surfaced the error
   }
+  const launchPath = writeLaunchConfig(project, options);
+  const snippetsWritten = writeSnippetsIfAbsent(project.path);
+
+  const parts = ["settings.json"];
+  if (launchPath) {
+    parts.push("launch.json");
+  }
+  if (snippetsWritten) {
+    parts.push("snippets");
+  }
+  void vscode.window.showInformationMessage(
+    `O3DE: wrote ${project.projectName}/.vscode — ${parts.join(" + ")}.`,
+  );
 }

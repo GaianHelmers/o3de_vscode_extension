@@ -19,6 +19,16 @@
   "main": "./dist/extension.js",
   "activationEvents": ["onStartupFinished"],
   "contributes": {
+    "configuration": {
+      "title": "O3DE Development Tools",
+      "properties": {
+        "o3de.intellisense.autoRefreshOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "On activation, regenerate C++ IntelliSense (`c_cpp_properties.json`) from the latest CMake File API reply. Low cost — re-parses the existing reply, does **not** run a CMake configure. Turn off to update only via the **O3DE: Generate C++ IntelliSense** command."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -72,6 +82,14 @@
       {
         "command": "o3de.configureProject",
         "title": "O3DE: Configure Project"
+      },
+      {
+        "command": "o3de.build",
+        "title": "O3DE: Build"
+      },
+      {
+        "command": "o3de.selectTargets",
+        "title": "O3DE: Select Build Targets"
       },
       {
         "command": "o3de.generateCppProperties",

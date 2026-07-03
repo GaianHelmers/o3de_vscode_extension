@@ -23,6 +23,11 @@ export function projectBuildDir(projectPath: string): string {
   return path.join(projectPath, "build", platformBuildDir());
 }
 
+/** The CMake File API reply directory for a project's build tree. */
+export function fileApiReplyDir(projectPath: string): string {
+  return path.join(projectBuildDir(projectPath), ".cmake", "api", "v1", "reply");
+}
+
 // ---- CMakeCache inspection -------------------------------------------------
 /**
  * The generator a build tree was configured with, read from CMakeCache.txt's

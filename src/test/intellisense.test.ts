@@ -1,6 +1,7 @@
 import * as assert from "assert";
 import {
   extractFragmentIncludes,
+  extractForcedIncludes,
   parseTarget,
   parseCompilerPath,
   pickConfiguration,
@@ -53,6 +54,16 @@ suite("intellisense/fileApi", () => {
     ]);
   });
 
+  test("extractForcedIncludes finds /FI inside combined flag fragments", () => {
+    assert.deepStrictEqual(
+      extractForcedIncludes([
+        { fragment: " /Gd /MP /FID:/Eng/Compat/VSCompat.h /wd4201 -std:c++20" },
+        { fragment: "/nologo" },
+      ]),
+      ["D:/Eng/Compat/VSCompat.h"],
+    );
+  });
+
   test("parseTarget extracts includes (+external), defines, and CXX standard", () => {
     const target = parseTarget({
       compileGroups: [
@@ -63,12 +74,16 @@ suite("intellisense/fileApi", () => {
             { path: "D:/Eng/Code/Framework/AzCore/.", isSystem: true },
           ],
           defines: [{ define: "AZ_ENABLE_TRACING" }, { define: "_HAS_EXCEPTIONS=0" }],
-          compileCommandFragments: [{ fragment: "-external:IC:/tp/Lua/include" }, { fragment: "/W4" }],
+          compileCommandFragments: [
+            { fragment: " /W4 /FID:/Eng/Compat/VSCompat.h /Zc:preprocessor" },
+            { fragment: "-external:IC:/tp/Lua/include" },
+          ],
           languageStandard: { standard: "20" },
         },
       ],
     });
     assert.deepStrictEqual(target.defines, ["AZ_ENABLE_TRACING", "_HAS_EXCEPTIONS=0"]);
+    assert.deepStrictEqual(target.forcedIncludes, ["D:/Eng/Compat/VSCompat.h"]);
     assert.strictEqual(target.standard, "20");
     assert.deepStrictEqual(
       target.includes.map((i) => i.path),
@@ -103,11 +118,13 @@ suite("intellisense/consolidate", () => {
       {
         includes: [{ path: "D:/Eng/Code/Framework/AzCore/." }, { path: "D:/Proj/Gem/Include" }],
         defines: ["WIN64", "AZ_PROFILE_BUILD"],
+        forcedIncludes: ["D:/Eng/Compat/VSCompat.h"],
         standard: "20",
       },
       {
         includes: [{ path: "D:\\Eng\\Code\\Framework\\AzCore\\.", isSystem: true }, { path: "D:/Eng/Code/Framework/AzFramework/." }],
         defines: ["WIN64", "NDEBUG"],
+        forcedIncludes: ["D:\\Eng\\Compat\\VSCompat.h"], // dup (different separators) → deduped
         standard: "17",
       },
     ]);
@@ -117,6 +134,7 @@ suite("intellisense/consolidate", () => {
       "D:/Eng/Code/Framework/AzFramework",
     ]);
     assert.deepStrictEqual(c.defines, ["WIN64", "AZ_PROFILE_BUILD", "NDEBUG"]);
+    assert.deepStrictEqual(c.forcedIncludes, ["D:/Eng/Compat/VSCompat.h"]); // normalized + deduped
     assert.strictEqual(c.standard, "20"); // first seen
   });
 });
@@ -178,11 +196,12 @@ suite("intellisense/cppProperties", () => {
     assert.strictEqual(cppStandardFromApi(undefined), "c++20");
   });
 
-  test("buildCppConfiguration sets MSVC fields + browse.path", () => {
+  test("buildCppConfiguration sets MSVC fields + forcedInclude + browse.path", () => {
     const cfg = buildCppConfiguration({
       name: "O3DE",
       includePath: ["${workspaceFolder}/Gem/Include"],
       defines: ["WIN64"],
+      forcedInclude: ["${workspaceFolder:Engine (source): o3de_sourcedev}/Code/Framework/AzCore/Platform/Common/VisualStudio/AzCore/Compat/VSCompat.h"],
       compilerPath: "C:/msvc/cl.exe",
       standard: "20",
     });
@@ -190,6 +209,12 @@ suite("intellisense/cppProperties", () => {
     assert.strictEqual(cfg["compilerPath"], "C:/msvc/cl.exe");
     assert.strictEqual(cfg["cppStandard"], "c++20");
     assert.deepStrictEqual((cfg["browse"] as Record<string, unknown>)["path"], ["${workspaceFolder}/Gem/Include"]);
+    assert.strictEqual((cfg["forcedInclude"] as string[]).length, 1);
+  });
+
+  test("buildCppConfiguration omits forcedInclude when empty", () => {
+    const cfg = buildCppConfiguration({ name: "O3DE", includePath: [], defines: [], forcedInclude: [] });
+    assert.ok(!("forcedInclude" in cfg));
   });
 
   test("mergeCppProperties replaces our config by name, keeps others + version", () => {
