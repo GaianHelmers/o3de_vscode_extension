@@ -26,10 +26,16 @@ export interface TargetCompile {
   standard?: string; // C++ standard digits, e.g. "20"
 }
 
+/** A target's compile config plus the source files it owns (for per-file provider config). */
+export interface LoadedTarget {
+  compile: TargetCompile;
+  sourcePaths: string[]; // C/C++ sources listed for the target (relative to project root, or absolute)
+}
+
 export interface FileApiReply {
   configName: string;
   compilerPath?: string; // CXX compiler (cl.exe) for c_cpp_properties.compilerPath
-  targets: TargetCompile[];
+  targets: LoadedTarget[];
 }
 
 // ---- Raw JSON shapes (only the fields we read) -----------------------------
@@ -51,6 +57,7 @@ interface CompileGroup {
 }
 interface TargetJson {
   compileGroups?: CompileGroup[];
+  sources?: { path: string }[];
 }
 
 // ---- Pure parsers ----------------------------------------------------------
@@ -106,6 +113,14 @@ export function parseTarget(json: TargetJson): TargetCompile {
     }
   }
   return { includes, defines, forcedIncludes, standard };
+}
+
+const CODE_SOURCE = /\.(c|cc|cpp|cxx|c\+\+|h|hh|hpp|hxx|inl|ipp|tpp)$/i;
+
+/** The C/C++ source files a target owns (skips .cmake/.props and — since unity blobs carry the
+ *  compile group — this is how we map a project's own files to their target's config). */
+export function parseTargetSourcePaths(json: TargetJson): string[] {
+  return (json.sources ?? []).map((s) => s.path).filter((p) => CODE_SOURCE.test(p));
 }
 
 /** The CXX compiler path (cl.exe) from the toolchains reply. */
@@ -183,11 +198,11 @@ export function loadFileApiReply(replyDir: string, configName: string): FileApiR
     return undefined;
   }
 
-  const targets: TargetCompile[] = [];
+  const targets: LoadedTarget[] = [];
   for (const target of config.targets) {
     const targetJson = readJson<TargetJson>(path.join(replyDir, target.jsonFile));
     if (targetJson) {
-      targets.push(parseTarget(targetJson));
+      targets.push({ compile: parseTarget(targetJson), sourcePaths: parseTargetSourcePaths(targetJson) });
     }
   }
 

@@ -5,13 +5,14 @@
 //  Uses ${workspaceFolder} (folder-level config → refers to the project itself),
 //  so there are no cross-folder name references here.
 //
-//  C++ IntelliSense = we own it (Approach 2): our Configure runs CMake with the
-//  MSVC env, and "Generate C++ IntelliSense" parses the File API reply into
-//  c_cpp_properties.json. Approach 1 (CMake Tools as cpptools configurationProvider)
-//  is REJECTED — CMake Tools cannot establish the MSVC environment for O3DE, so its
-//  configure fails. We also set cmake.configureOnOpen=false to stop CMake Tools from
-//  auto-running that failing configure.
+//  C++ IntelliSense = we own it (Approach 2). configurationProvider points at THIS
+//  extension: cpptools asks our live provider (provider.ts) for per-file config, with
+//  c_cpp_properties.json (also generated) as the fallback. NOT CMake Tools — it can't
+//  establish the MSVC environment for O3DE. cmake.configureOnOpen=false stops CMake
+//  Tools from auto-running its failing configure.
 // ============================================================================
+
+import { EXTENSION_ID } from "../constants";
 
 export interface ProjectSettingsOptions {
   generator: string; // "Ninja Multi-Config" | "Visual Studio 17 2022"
@@ -34,6 +35,8 @@ export function buildProjectSettings(opts: ProjectSettingsOptions): Record<strin
     "cmake.exportCompileCommandsFile": false,
     // We own configure (MSVC env) — stop CMake Tools auto-running its failing configure.
     "cmake.configureOnOpen": false,
+    // cpptools → our live provider (per-file); c_cpp_properties.json is the fallback.
+    "C_Cpp.default.configurationProvider": EXTENSION_ID,
     "cmake.defaultVariants": {
       buildType: {
         default: opts.defaultConfig,

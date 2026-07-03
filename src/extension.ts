@@ -22,6 +22,7 @@ import { buildProject } from "./build/build";
 import { selectTargets } from "./build/selectTargets";
 import { runProject, stopRun } from "./build/run";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
+import { registerConfigurationProvider } from "./intellisense/provider";
 import {
   BuildOptions,
   GENERATORS,
@@ -179,6 +180,9 @@ export function activate(context: vscode.ExtensionContext): void {
   if (vscode.workspace.getConfiguration("o3de").get<boolean>("intellisense.autoRefreshOnStartup", true)) {
     void refreshCppPropertiesOnStartup(buildOptions);
   }
+
+  // Live C++ IntelliSense: register with cpptools as a per-file configuration provider (reactive).
+  void registerConfigurationProvider(context, buildOptions);
 
   context.subscriptions.push(
     buildOptions,

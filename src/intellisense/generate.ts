@@ -4,10 +4,10 @@
 //  Reads the CMake File API reply our Configure produced, consolidates the
 //  include/define graph, remaps engine paths to the workspace SOURCE engine
 //  (so F12 lands in the folder the user edits, not the prebuilt build engine),
-//  and writes <project>/.vscode/c_cpp_properties.json. Also removes the dead
-//  `C_Cpp.default.configurationProvider` from settings.json — with it set,
-//  cpptools would defer to CMake Tools (which can't build O3DE) and ignore our
-//  file. No CMake Tools dependency: we own the whole data layer.
+//  and writes <project>/.vscode/c_cpp_properties.json (the FALLBACK layer). Also
+//  sets `C_Cpp.default.configurationProvider` to THIS extension so cpptools uses
+//  our live provider (provider.ts); c_cpp_properties.json applies when it's
+//  inactive. No CMake Tools dependency: we own the whole data layer.
 // ============================================================================
 
 import * as vscode from "vscode";
@@ -15,36 +15,23 @@ import * as fs from "fs";
 import * as path from "path";
 import * as jsonc from "jsonc-parser";
 import { log } from "../log";
-import { resolveProjectEngine, discoverEngines } from "../o3de/discovery";
 import { BuildOptions } from "../build/buildOptions";
 import { fileApiReplyDir } from "../build/configureCommand";
 import { resolveWorkspaceProject } from "../build/projectResolve";
 import { O3deProject, readProject } from "../o3de/identity";
 import { folderRef, sourceEngineFolder } from "../build/workspaceFolders";
+import { EXTENSION_ID } from "../constants";
 import { loadFileApiReply } from "./fileApi";
 import { consolidateTargets } from "./consolidate";
+import { detectBuildEngineRoot } from "./engineRoot";
 import { remapIncludes, remapPath, RootMapping } from "./remap";
 import { buildCppConfiguration, mergeCppProperties } from "./cppProperties";
-import { isUnderRoot, normalizePath, uniqueStable } from "./paths";
+import { uniqueStable } from "./paths";
 
 const CONFIG_NAME = "O3DE";
 const CONFIGURATION_PROVIDER_KEY = "C_Cpp.default.configurationProvider";
 
 // ---- Remap targets (workspace-aware) ---------------------------------------
-/** The build engine (File API root): project.json `engine`, else the registered engine the includes sit under. */
-function detectBuildEngineRoot(project: O3deProject, includePaths: string[]): string | undefined {
-  const engine = resolveProjectEngine(project);
-  if (engine) {
-    return normalizePath(engine.path);
-  }
-  for (const candidate of discoverEngines()) {
-    if (includePaths.some((p) => isUnderRoot(p, candidate.path))) {
-      return normalizePath(candidate.path);
-    }
-  }
-  return undefined;
-}
-
 /** Engine redirect (build → source) + relativize any other in-workspace path. */
 function buildMappings(project: O3deProject, includePaths: string[]): RootMapping[] {
   const mappings: RootMapping[] = [];
@@ -68,22 +55,25 @@ function buildMappings(project: O3deProject, includePaths: string[]): RootMappin
   return mappings;
 }
 
-// ---- settings.json hygiene -------------------------------------------------
-/** Remove the dead configurationProvider so cpptools reads c_cpp_properties.json. */
-function disableConfigurationProvider(projectPath: string): void {
-  const settingsPath = path.join(projectPath, ".vscode", "settings.json");
-  if (!fs.existsSync(settingsPath)) {
-    return;
+// ---- settings.json: point cpptools at our live provider --------------------
+/** Ensure C_Cpp.default.configurationProvider = this extension, so cpptools uses the live provider
+ *  (provider.ts). c_cpp_properties.json is the fallback when the provider is inactive. */
+function setConfigurationProvider(projectPath: string): void {
+  const dir = path.join(projectPath, ".vscode");
+  const settingsPath = path.join(dir, "settings.json");
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    const parsed = jsonc.parse(fs.readFileSync(settingsPath, "utf8"), [], { allowTrailingComma: true });
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return; // unparseable — leave it alone
+    }
+    settings = parsed as Record<string, unknown>;
   }
-  const parsed = jsonc.parse(fs.readFileSync(settingsPath, "utf8"), [], { allowTrailingComma: true });
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return;
-  }
-  const settings = parsed as Record<string, unknown>;
-  if (CONFIGURATION_PROVIDER_KEY in settings) {
-    delete settings[CONFIGURATION_PROVIDER_KEY];
+  if (settings[CONFIGURATION_PROVIDER_KEY] !== EXTENSION_ID) {
+    settings[CONFIGURATION_PROVIDER_KEY] = EXTENSION_ID;
+    fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 4)}\n`, "utf8");
-    log().info(`IntelliSense: removed dead ${CONFIGURATION_PROVIDER_KEY} from settings.json.`);
+    log().info(`IntelliSense: set ${CONFIGURATION_PROVIDER_KEY} = ${EXTENSION_ID}.`);
   }
 }
 
@@ -101,7 +91,7 @@ function emitCppProperties(project: O3deProject, options: BuildOptions): number 
     return undefined;
   }
 
-  const consolidated = consolidateTargets(reply.targets);
+  const consolidated = consolidateTargets(reply.targets.map((t) => t.compile));
   const mappings = buildMappings(
     project,
     consolidated.includes.map((inc) => inc.path),
@@ -128,7 +118,7 @@ function emitCppProperties(project: O3deProject, options: BuildOptions): number 
     }
   }
   const output = `${JSON.stringify(mergeCppProperties(existing, config), null, 4)}\n`;
-  disableConfigurationProvider(project.path);
+  setConfigurationProvider(project.path);
 
   // Skip the write (and the cpptools reparse it triggers) when nothing changed — this is what
   // keeps the startup auto-refresh truly low-cost when the last configure is still current.

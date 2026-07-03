@@ -10,13 +10,10 @@ suite("buildProjectSettings", () => {
     defaultConfig: "profile",
   });
 
-  test("uses the chosen generator; no CMake-Tools IntelliSense coupling (Approach 1 rejected)", () => {
+  test("uses the chosen generator; points cpptools at OUR provider (not CMake Tools), no n_cc", () => {
     assert.strictEqual(s["cmake.generator"], "Ninja Multi-Config");
-    // Approach 2: we own IntelliSense via c_cpp_properties.json — no provider, no n_cc.
-    assert.ok(
-      !("C_Cpp.default.configurationProvider" in s),
-      "must not defer IntelliSense to CMake Tools (it can't build O3DE)",
-    );
+    // Approach 2: cpptools → our live provider; NOT ms-vscode.cmake-tools (it can't build O3DE).
+    assert.strictEqual(s["C_Cpp.default.configurationProvider"], "GaianHelmers.o3de-development-tools");
     assert.ok(!("C_Cpp.default.compileCommands" in s), "must not emit compileCommands (n_cc)");
     assert.strictEqual(s["cmake.configureOnOpen"], false); // stop CMake Tools' failing auto-configure
   });
