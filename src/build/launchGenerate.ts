@@ -16,6 +16,7 @@ import { resolveProjectEngine } from "../o3de/discovery";
 import { BuildOptions } from "./buildOptions";
 import { platformBuildDir } from "./configureCommand";
 import { buildLaunchConfigurations, mergeLaunchJson, LaunchInputs } from "./launchConfig";
+import { editorExeCandidates } from "./runCommand";
 import { sourceEngineFolder, workspaceFolderForPath } from "./workspaceFolders";
 import { normalizePath, replaceRoot } from "../intellisense/paths";
 
@@ -23,27 +24,26 @@ const NATVIS_REL = "/Code/Framework/AzCore/Platform/Common/VisualStudio/AzCore/N
 const CLASSWIZARD_REL = "/Tools/ClassCreationWizard/ClassWizard.py";
 
 // ---- Editor program: prebuilt-engine vs project-build (auto-detect) --------
+//  Shares editorExeCandidates() with the Run command so both resolve the Editor
+//  the same way; this file only rewrites the chosen path to a workspace-folder ref.
 function resolveEditorProgram(project: O3deProject, config: string, projectRef: string): string {
-  const platform = platformBuildDir();
   const engine = resolveProjectEngine(project);
+  const candidates = editorExeCandidates(engine, project.path, config).map(normalizePath);
+  const found = candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
 
-  // Prebuilt SDK engine → the engine's own Editor.exe. Probe the known layouts.
+  // Prebuilt SDK engine → the engine's own Editor.exe; reference the build-engine
+  // workspace folder if it's open, else keep it absolute.
   if (engine?.isSdkEngine) {
-    const candidates = [
-      `${engine.path}/bin/Windows/${config}/Default/Editor.exe`,
-      `${engine.path}/bin/Windows/${config}/Editor.exe`,
-    ].map(normalizePath);
-    const found = candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
     if (!fs.existsSync(found)) {
       log().warn(`Editor.exe not found under ${engine.path} (engine not built here?); using ${found}.`);
     }
-    // Reference the build-engine workspace folder if it's open, else keep it absolute.
     const workspaceFolder = workspaceFolderForPath(engine.path);
     return workspaceFolder ? replaceRoot(found, engine.path, workspaceFolder.ref) : found;
   }
 
-  // Source-built / custom / unresolved engine → the project's own built Editor.
-  return `${projectRef}/build/${platform}/bin/${config}/Editor.exe`;
+  // Source-built / custom / unresolved engine → the project's own built Editor,
+  // rewritten to the ${workspaceFolder} ref (launch.json lives in <project>/.vscode).
+  return replaceRoot(found, project.path, projectRef);
 }
 
 // ---- Write launch.json -----------------------------------------------------

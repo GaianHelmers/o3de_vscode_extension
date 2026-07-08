@@ -10,6 +10,7 @@
 import * as path from "path";
 import { platformBuildDir } from "./configureCommand";
 import type { RunTarget } from "./buildOptions";
+import type { O3deEngine } from "../o3de/identity";
 
 // ---- Runtime-exe paths -----------------------------------------------------
 /** A built runtime exe in the project tree: <project>/build/<platform>/bin/<config>/<exe>. */
@@ -20,6 +21,29 @@ export function projectRuntimeExe(projectPath: string, config: string, exeName: 
 /** O3DE launcher naming: <Project>.GameLauncher.exe (matches the user's build output). */
 export function gameLauncherExeName(projectName: string): string {
   return `${projectName}.GameLauncher.exe`;
+}
+
+/**
+ * Editor.exe candidate paths in priority order, keyed off the project's engine —
+ * the single source of truth shared by Run (run.ts) and launch.json (launchGenerate.ts).
+ *   - SDK (prebuilt) engine → the engine's own prebuilt Editor (Default/ then flat bin).
+ *     The project build dir only holds copied DLLs + custom gems; its Editor.exe is a
+ *     stale stub and must NOT be run (running it exits code 1).
+ *   - source / custom / unresolved engine → the project's own built Editor.
+ * Pure: the caller resolves the engine, then picks the first candidate that exists.
+ * NOTE: engine bin is capital-"Windows" on disk; the project build dir is lowercase
+ * (platformBuildDir) — do not "unify" the casing.
+ */
+export function editorExeCandidates(
+  engine: O3deEngine | undefined,
+  projectPath: string,
+  config: string,
+): string[] {
+  if (engine?.isSdkEngine) {
+    const engineBin = path.join(engine.path, "bin", "Windows", config);
+    return [path.join(engineBin, "Default", "Editor.exe"), path.join(engineBin, "Editor.exe")];
+  }
+  return [projectRuntimeExe(projectPath, config, "Editor.exe")];
 }
 
 // ---- Launch args -----------------------------------------------------------

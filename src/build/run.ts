@@ -3,9 +3,10 @@
 //
 //  The companion to Build: launches the selected run target (Editor or the
 //  project's GameLauncher) detached, with the user's optional launch options,
-//  and tracks it so Stop can force-quit the whole process tree. Editor is
-//  probed project-build-first (run what you just built), then the engine bin
-//  for SDK-engine projects. Windows-focused, mirroring Build/Configure.
+//  and tracks it so Stop can force-quit the whole process tree. The Editor exe
+//  is resolved by engine type (SDK/prebuilt → engine bin; source → project
+//  build) via the same helper the launch.json generator uses, and the choice is
+//  logged. Windows-focused, mirroring Build/Configure.
 // ============================================================================
 
 import * as vscode from "vscode";
@@ -16,19 +17,12 @@ import { BuildOptions, RunTarget } from "./buildOptions";
 import { O3deProject } from "../o3de/identity";
 import { resolveProjectEngine } from "../o3de/discovery";
 import { resolveWorkspaceProject } from "./projectResolve";
-import { runArgsFor, projectRuntimeExe, gameLauncherExeName } from "./runCommand";
+import { runArgsFor, projectRuntimeExe, gameLauncherExeName, editorExeCandidates } from "./runCommand";
 import * as runManager from "./runManager";
 
-// ---- Runtime-exe resolution (project build first, then SDK engine) ---------
+// ---- Runtime-exe resolution (SDK engine → engine prebuilt; source → project build) ----
 function resolveEditorExe(project: O3deProject, config: string): string {
-  const candidates = [projectRuntimeExe(project.path, config, "Editor.exe")];
-  const engine = resolveProjectEngine(project);
-  if (engine) {
-    candidates.push(
-      path.join(engine.path, "bin", "Windows", config, "Default", "Editor.exe"),
-      path.join(engine.path, "bin", "Windows", config, "Editor.exe"),
-    );
-  }
+  const candidates = editorExeCandidates(resolveProjectEngine(project), project.path, config);
   return candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
 }
 
@@ -36,6 +30,23 @@ function resolveRunnable(project: O3deProject, target: RunTarget, config: string
   return target === "Editor"
     ? resolveEditorExe(project, config)
     : projectRuntimeExe(project.path, config, gameLauncherExeName(project.projectName));
+}
+
+// ---- Diagnostics: log HOW we resolved the exe (SDK vs source + candidates) --
+function logRunResolution(project: O3deProject, target: RunTarget, config: string): void {
+  if (target !== "Editor") {
+    log().info(`Run target: GameLauncher → project build output.`);
+    return;
+  }
+  const engine = resolveProjectEngine(project);
+  const kind = engine?.isSdkEngine
+    ? `SDK/prebuilt engine "${engine.engineName}" → engine prebuilt bin`
+    : engine
+      ? `source/custom engine "${engine.engineName}" → project build output`
+      : `engine UNRESOLVED (project.json engine="${project.engine ?? "?"}") → project build output`;
+  log().info(`Run target: Editor — detected ${kind}${engine ? ` (${engine.path})` : ""}.`);
+  const candidates = editorExeCandidates(engine, project.path, config);
+  candidates.forEach((c) => log().info(`  candidate: ${c}${fs.existsSync(c) ? " [exists]" : " [missing]"}`));
 }
 
 // ---- Command: Run ----------------------------------------------------------
@@ -65,6 +76,7 @@ export async function runProject(options: BuildOptions): Promise<void> {
 
   const target = options.runTarget;
   const exe = resolveRunnable(project, target, options.config);
+  logRunResolution(project, target, options.config);
   if (!fs.existsSync(exe)) {
     const choice = await vscode.window.showErrorMessage(
       `O3DE: ${path.basename(exe)} not found for config "${options.config}". Build the ${target} target first.`,

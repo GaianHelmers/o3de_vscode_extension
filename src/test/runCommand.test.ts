@@ -5,10 +5,12 @@ import {
   runArgsFor,
   projectRuntimeExe,
   gameLauncherExeName,
+  editorExeCandidates,
   runSummary,
   launchArgsLabel,
 } from "../build/runCommand";
 import { platformBuildDir } from "../build/configureCommand";
+import type { O3deEngine } from "../o3de/identity";
 
 suite("runCommand", () => {
   test("parseLaunchArgs splits on whitespace and honors double quotes", () => {
@@ -47,6 +49,21 @@ suite("runCommand", () => {
 
   test("gameLauncherExeName is project-prefixed (matches the real build output)", () => {
     assert.strictEqual(gameLauncherExeName("GS_Play"), "GS_Play.GameLauncher.exe");
+  });
+
+  test("editorExeCandidates: SDK engine → engine prebuilt bin; source/none → project build", () => {
+    const sdk = { engineName: "GS_Play_Engine", isSdkEngine: true, path: "D:/eng" } as O3deEngine;
+    // SDK/prebuilt: the engine's own bin (Default/ preferred, flat as fallback) — NOT the project build.
+    assert.deepStrictEqual(editorExeCandidates(sdk, "D:/proj", "profile"), [
+      path.join("D:/eng", "bin", "Windows", "profile", "Default", "Editor.exe"),
+      path.join("D:/eng", "bin", "Windows", "profile", "Editor.exe"),
+    ]);
+
+    // Source engine and unresolved engine both → the project's own built Editor.
+    const projBuild = projectRuntimeExe("D:/proj", "profile", "Editor.exe");
+    const source = { engineName: "SrcEngine", isSdkEngine: false, path: "D:/eng" } as O3deEngine;
+    assert.deepStrictEqual(editorExeCandidates(source, "D:/proj", "profile"), [projBuild]);
+    assert.deepStrictEqual(editorExeCandidates(undefined, "D:/proj", "profile"), [projBuild]);
   });
 
   test("runSummary / launchArgsLabel reflect the current selection", () => {
