@@ -68,6 +68,22 @@ export async function killByName(image: string): Promise<void> {
 }
 
 // ---- Launch / stop ---------------------------------------------------------
+// The Editor inherits our environment when we spawn it. VS Code injects vars
+// (VSCODE_IPC_HOOK_CLI, VSCODE_PID, ELECTRON_RUN_AS_NODE, …) that make any
+// `code`/`code-insiders --open-url` the Editor later invokes — e.g. the O3DE
+// "Open Lua Editor" handoff — target VS Code's own CLI instead of the running
+// window, so the handoff silently dies. Strip them for a clean child env.
+function cleanChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("VSCODE_") || key === "ELECTRON_RUN_AS_NODE") {
+      continue;
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
 /** Spawn the app detached, track its PID, and clear the entry on exit. Returns the PID (0 on failure). */
 export function launch(
   projectPath: string,
@@ -76,7 +92,7 @@ export function launch(
   cwd: string,
   label: string,
 ): number {
-  const child = spawn(exe, args, { cwd, detached: true, stdio: "ignore" });
+  const child = spawn(exe, args, { cwd, detached: true, stdio: "ignore", env: cleanChildEnv() });
   child.unref(); // let the app outlive the extension host; we still hold the ref for exit/kill
   const pid = child.pid ?? 0;
   running.set(projectPath, { child, pid, label });

@@ -2,7 +2,7 @@
   "name": "o3de-development-tools",
   "displayName": "O3DE Development Tools",
   "description": "Developer companion for Open 3D Engine (O3DE): guided workspace setup, one-click CMake build & run, and C++ IntelliSense — for VS Code on Windows.",
-  "version": "0.0.2",
+  "version": "0.0.4",
   "icon": "media/icon.png",
   "publisher": "GenomeStudiosInc",
   "license": "MIT",
@@ -19,7 +19,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "contributes": {
     "configuration": {
@@ -136,6 +137,74 @@
       {
         "command": "o3de.selectConfig",
         "title": "O3DE: Select Build Configuration"
+      },
+      {
+        "command": "o3de.registerAsLuaEditor",
+        "title": "O3DE: Register VS Code as Lua Editor"
+      },
+      {
+        "command": "o3de.debugLuaFile",
+        "title": "O3DE: Debug Lua File",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "o3de.newLuaScript",
+        "title": "O3DE: New Lua Script",
+        "icon": "$(new-file)"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "lua"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "o3de-lua",
+        "label": "O3DE Lua",
+        "languages": ["lua"],
+        "configurationAttributes": {
+          "attach": {
+            "properties": {
+              "projectPath": {
+                "type": "string",
+                "description": "Absolute path to the O3DE project root (folder containing project.json). Auto-detected from the active file if omitted."
+              },
+              "port": {
+                "type": "number",
+                "description": "TCP port the debugger listens on for the O3DE target.",
+                "default": 6777
+              },
+              "scriptContext": {
+                "type": "string",
+                "description": "Lua script context to attach to.",
+                "default": "Default"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "o3de-lua",
+            "request": "attach",
+            "name": "O3DE: Debug Lua",
+            "projectPath": "${workspaceFolder}",
+            "port": 6777
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "O3DE: Attach to Lua",
+            "description": "Debug O3DE Lua scripts (Editor/GameLauncher must be running, non-Release build, RemoteTools gem enabled).",
+            "body": {
+              "type": "o3de-lua",
+              "request": "attach",
+              "name": "O3DE: Debug Lua",
+              "projectPath": "^\"\\${workspaceFolder}\"",
+              "port": 6777
+            }
+          }
+        ]
       }
     ],
     "keybindings": [
@@ -149,7 +218,16 @@
         "key": "ctrl+alt+r",
         "mac": "cmd+alt+r"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "o3de.debugLuaFile",
+          "when": "resourceLangId == lua",
+          "group": "navigation@10"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -164,6 +242,8 @@
     "test": "vscode-test"
   },
   "dependencies": {
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
     "jsonc-parser": "^3.3.1",
     "vscode-cpptools": "^7.1.1"
   },

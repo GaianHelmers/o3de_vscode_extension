@@ -26,6 +26,8 @@ import { runProject, stopRun } from "./build/run";
 import { RunState } from "./build/runState";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
 import { registerConfigurationProvider } from "./intellisense/provider";
+import { registerLuaDebug, debugLuaFile } from "./lua/debug/debugAdapter";
+import { registerLuaHandoff } from "./lua/handoff";
 import {
   BuildOptions,
   GENERATORS,
@@ -216,6 +218,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // Live C++ IntelliSense: register with cpptools as a per-file configuration provider (reactive).
   void registerConfigurationProvider(context, buildOptions);
 
+  // Lua: remote debugger (DAP) + Editor "Open Lua Editor" handoff (vscode:// URI).
+  registerLuaDebug(context);
+  registerLuaHandoff(context);
+  const debugLua = vscode.commands.registerCommand("o3de.debugLuaFile", (uri?: vscode.Uri) => {
+    void debugLuaFile(uri);
+  });
+
   context.subscriptions.push(
     buildOptions,
     onboarding,
@@ -241,6 +250,7 @@ export function activate(context: vscode.ExtensionContext): void {
     setLaunchArgs,
     showEditorLog,
     showErrorLog,
+    debugLua,
     dashboardView,
     statusItem,
   );

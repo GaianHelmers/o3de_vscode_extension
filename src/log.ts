@@ -21,11 +21,19 @@ export function initLog(context: vscode.ExtensionContext): vscode.LogOutputChann
   return channel;
 }
 
+// A console-backed fallback so code paths that can run before activate() (e.g.
+// unit tests exercising a module directly) don't crash on log().
+const fallback = {
+  trace: (...a: unknown[]) => console.trace(...a),
+  debug: (...a: unknown[]) => console.debug(...a),
+  info: (...a: unknown[]) => console.info(...a),
+  warn: (...a: unknown[]) => console.warn(...a),
+  error: (...a: unknown[]) => console.error(...a),
+  show: () => undefined,
+} as unknown as vscode.LogOutputChannel;
+
 // ---- Access ----------------------------------------------------------------
-/** The shared logger. initLog() must have run first (it does, in activate()). */
+/** The shared logger. Falls back to console if used before initLog() (e.g. tests). */
 export function log(): vscode.LogOutputChannel {
-  if (!channel) {
-    throw new Error("Logger used before initLog() was called in activate().");
-  }
-  return channel;
+  return channel ?? fallback;
 }

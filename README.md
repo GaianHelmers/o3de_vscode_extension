@@ -23,11 +23,26 @@ with live status, Build/Run, utilities, and collapsible Configuration & Onboardi
   Attach / Class Creation Wizard) + O3DE code snippets.
 - **Quick access** — Editor / Error logs, the extension output channel, and keybindings for Build
   (`Ctrl+Alt+B`) and Run (`Ctrl+Alt+R`).
+- **Lua debugging** — a full Debug Adapter that speaks O3DE's RemoteTools protocol natively (no
+  companion gem): breakpoints, stepping, call stack, locals, watch, and edit-value, against a
+  running Editor or GameLauncher. Plus an **"Open in VS Code" handoff** so the Editor's *Tools ▸ Lua
+  Editor* and a Script component's *Edit* button open scripts here.
+
+### Debugging Lua
+
+1. Run **O3DE: Register VS Code as Lua Editor** once (writes `/O3DE/Lua/Debugger/Uri` into your
+   project's registry). Restart the Editor. Now "Open Lua Editor" in O3DE opens the script here.
+2. Open a `.lua` file, set breakpoints, and click **Debug Lua File** (the ▷ in the editor title bar)
+   or press F5 with the *O3DE: Attach to Lua* configuration.
+3. Start your game (Editor Game Mode, or the GameLauncher). It connects to VS Code automatically and
+   breakpoints hit.
+
+Requires a **non-Release** Editor/Launcher build with the **RemoteTools gem** enabled (the default in
+O3DE's standard project templates). Debugging is localhost-only, one target at a time.
 
 ## Planned features
 
-- **Lua** completion & IntelliSense driven by O3DE reflection, a Lua **debugger** (DAP), and an
-  Editor "Open in VS Code" handoff.
+- **Lua** completion & IntelliSense driven by O3DE reflection (LuaLS annotation stubs).
 - **Reflection browser** — inspect reflected components, EBuses, and the BehaviorContext.
 - **Templates & a Class Creation Wizard** (components, EBuses, gems).
 - Broader cross-platform support.
