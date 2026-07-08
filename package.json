@@ -44,16 +44,9 @@
       "o3de": [
         {
           "id": "o3de.dashboard",
-          "name": "Dashboard",
+          "name": "O3DE Development Tools",
           "type": "webview",
-          "visibility": "visible",
-          "initialSize": 5
-        },
-        {
-          "id": "o3de.onboarding",
-          "name": "Onboarding",
-          "visibility": "collapsed",
-          "initialSize": 2
+          "visibility": "visible"
         }
       ]
     },

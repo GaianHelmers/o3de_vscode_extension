@@ -14,7 +14,6 @@ import { initLog, log } from "./log";
 import { ensureVisualStudio } from "./env/visualStudioGuard";
 import { openDeveloperTerminal } from "./env/developerTerminal";
 import { ensureNinja } from "./build/ninjaGuard";
-import { SectionTreeProvider, onboardingRoots } from "./view/toolingView";
 import { DashboardViewProvider } from "./view/dashboardView";
 import { OnboardingStatus } from "./view/onboardingStatus";
 import { openEditorLog, openErrorLog } from "./build/o3deLogs";
@@ -193,30 +192,12 @@ export function activate(context: vscode.ExtensionContext): void {
   statusItem.command = "o3de.helloWorld";
   statusItem.show();
 
-  // O3DE activity-bar tab → Dashboard (webview: status + Build/Run + Utilities + Configuration).
+  // O3DE activity-bar tab → the single "O3DE Development Tools" webview
+  // (status + Build/Run + Utilities + collapsible Configuration + Onboarding).
   const dashboardView = vscode.window.registerWebviewViewProvider(
     DashboardViewProvider.viewType,
     new DashboardViewProvider(runState, onboarding, buildOptions),
   );
-
-  // O3DE activity-bar tab → Onboarding tree (collapsible, below the Dashboard).
-  const onboardingView = vscode.window.createTreeView("o3de.onboarding", {
-    treeDataProvider: new SectionTreeProvider(
-      () => onboardingRoots(onboarding),
-      (fire) => onboarding.onDidChange(fire),
-    ),
-  });
-
-  // Badge the Onboarding view with the count of outstanding steps (the full
-  // message + lights live in the Dashboard). Clears when complete.
-  const updateOnboardingBadge = (): void => {
-    const pending = onboarding.pendingCount;
-    onboardingView.badge = pending
-      ? { value: pending, tooltip: `${pending} onboarding step(s) remaining` }
-      : undefined;
-  };
-  onboarding.onDidChange(updateOnboardingBadge);
-  updateOnboardingBadge();
 
   // Prerequisites are detected in the background so the tree paints markers
   // without spawning processes on every render; workspace changes re-render live.
@@ -261,7 +242,6 @@ export function activate(context: vscode.ExtensionContext): void {
     showEditorLog,
     showErrorLog,
     dashboardView,
-    onboardingView,
     statusItem,
   );
 }

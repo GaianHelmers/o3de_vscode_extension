@@ -1,19 +1,21 @@
 // ============================================================================
-//  Dashboard — the O3DE tab's control panel, in one styleable webview.
+//  O3DE Development Tools — the single control panel for the O3DE tab.
 //
-//  Laid out for finer aesthetic control than a stack of native views:
+//  One webview owns the whole surface (it is the container's only view, so VS
+//  Code hides the per-view header and this reads as one "O3DE Development Tools"
+//  panel). Everything lives here, styled by us:
 //
 //    BUILD & RUN            header carries the discreet status readout on the
-//    [ Build ] [ Run ]      right (● Ready, or the attention pills). Build/Run
+//    [ Build ] [ Run ]      right (● Ready, or attention pills). Build/Run
 //                           disable when there's no project to act on.
 //    UTILITIES              Show Log · Terminal · Editor Log · Error Log
-//    ── spacer ──
-//    CONFIGURATION          Build Options / Project Setup / Launch Settings —
-//                           folded in from the old tree so its look is ours.
+//    ── divider ──
+//    ▸ CONFIGURATION        collapsible — Build Options / Project Setup / Launch
+//    ▸ ONBOARDING           collapsible — Prerequisites / Workspace (status dots)
 //
-//  Status: satisfied prerequisites collapse into one green cluster; only items
-//  needing attention surface as named pills (red = missing → install on demand,
-//  yellow = update available). "All systems go" shows only on the completing edge.
+//  Collapse state persists via the webview state API. Status: satisfied checks
+//  fold into one green cluster; only items needing attention surface as named
+//  pills (red = missing → install on demand, yellow = update available).
 // ============================================================================
 
 import * as vscode from "vscode";
@@ -32,10 +34,10 @@ const COMMANDS: Record<string, string> = {
   log: "o3de.showLog",
   editorLog: "o3de.showEditorLog",
   errorLog: "o3de.showErrorLog",
-  focusOnboarding: "o3de.onboarding.focus", // auto-generated view-focus command
   checkVs: "o3de.checkVisualStudio",
   checkNinja: "o3de.checkNinja",
   setup: "o3de.setupWorkspace",
+  addGems: "o3de.addGems",
   selectGenerator: "o3de.selectGenerator",
   selectConfig: "o3de.selectConfig",
   selectTargets: "o3de.selectTargets",
@@ -76,17 +78,16 @@ interface StatusPayload {
   attention: AttentionPill[];
 }
 
-function statusPayload(onboarding: OnboardingStatus, justCompleted: boolean): StatusPayload {
+function workspaceSummary(o: OnboardingStatus): string {
+  return `${o.hasProject ? "project ✓" : "project ✗"} · ${o.hasEngineSource ? "engine ✓" : "engine ✗"}`;
+}
+
+function statusPayload(o: OnboardingStatus, justCompleted: boolean): StatusPayload {
   const checks = [
-    { label: "Visual Studio", ok: onboarding.hasVisualStudio, warn: false, cmd: "checkVs" },
-    {
-      label: "Ninja",
-      ok: onboarding.hasNinja,
-      warn: onboarding.hasNinja && onboarding.ninjaUpdateAvailable,
-      cmd: "checkNinja",
-    },
-    { label: "Project", ok: onboarding.hasProject, warn: false, cmd: "setup" },
-    { label: "Engine", ok: onboarding.hasEngineSource, warn: false, cmd: "setup" },
+    { label: "Visual Studio", ok: o.hasVisualStudio, warn: false, cmd: "checkVs" },
+    { label: "Ninja", ok: o.hasNinja, warn: o.hasNinja && o.ninjaUpdateAvailable, cmd: "checkNinja" },
+    { label: "Project", ok: o.hasProject, warn: false, cmd: "setup" },
+    { label: "Engine", ok: o.hasEngineSource, warn: false, cmd: "setup" },
   ];
   const attention: AttentionPill[] = checks
     .filter((c) => !c.ok || c.warn)
@@ -140,6 +141,28 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
   };
 }
 
+function onboardingPayload(o: OnboardingStatus) {
+  return {
+    complete: o.complete,
+    groups: [
+      {
+        title: "Prerequisites",
+        rows: [
+          { label: "Visual Studio", ok: o.hasVisualStudio, value: o.hasVisualStudio ? "ready" : "not found", cmd: "checkVs" },
+          { label: "Ninja", ok: o.hasNinja, value: o.hasNinja ? "installed" : "not found", cmd: "checkNinja" },
+        ],
+      },
+      {
+        title: "Workspace",
+        rows: [
+          { label: "Set Up O3DE Workspace…", ok: o.workspaceComplete, value: workspaceSummary(o), cmd: "setup" },
+          { label: "Add Gems / Folders…", cmd: "addGems" },
+        ],
+      },
+    ],
+  };
+}
+
 // ---- Provider --------------------------------------------------------------
 export class DashboardViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "o3de.dashboard";
@@ -174,6 +197,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     };
     const postConfig = (): void =>
       void webview.postMessage({ type: "config", ...configPayload(this.options, this.onboarding) });
+    const postOnboarding = (): void =>
+      void webview.postMessage({ type: "onboarding", ...onboardingPayload(this.onboarding) });
 
     this.disposeSubs();
     this.subs.push(
@@ -181,6 +206,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       this.onboarding.onDidChange(() => {
         postStatus();
         postConfig(); // canBuild/canRun depend on onboarding (project presence)
+        postOnboarding();
       }),
       this.options.onDidChange(() => postConfig()),
     );
@@ -204,6 +230,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       running: this.runState.isRunning,
       status: statusPayload(this.onboarding, false),
       config: configPayload(this.options, this.onboarding),
+      onboarding: onboardingPayload(this.onboarding),
     });
 
     return `<!DOCTYPE html>
@@ -229,7 +256,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 
     /* Status readout (in the Build & Run header) */
     .status { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; display: inline-block; }
     .chip {
       display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
       border-radius: 11px; padding: 2px 8px; font-size: 11px; line-height: 1.4;
@@ -277,17 +304,37 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .stop:hover { background: var(--vscode-statusBarItem-errorBackground, #b91c1c); filter: brightness(1.12); }
     .stop:disabled { opacity: 0.4; }
 
-    /* Spacer + Configuration list */
-    .spacer { height: 1px; background: var(--vscode-panel-border); margin: 4px 0; opacity: 0.7; }
-    .cfg-rows { display: flex; flex-direction: column; }
+    .divider { height: 1px; background: var(--vscode-panel-border); margin: 2px 0; opacity: 0.7; }
+
+    /* Collapsible sections */
+    .sec { display: flex; flex-direction: column; }
+    .sec-hdr {
+      justify-content: flex-start; gap: 6px; height: 26px; padding: 0 4px; border-radius: 4px;
+      background: transparent; color: var(--vscode-descriptionForeground);
+      font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    }
+    .sec-hdr:hover { background: var(--vscode-list-hoverBackground); }
+    .chev { font-size: 10px; transition: transform 120ms ease; opacity: 0.8; }
+    .sec.open > .sec-hdr .chev { transform: rotate(90deg); }
+    .sec-status { margin-left: auto; }
+    .sec-body { display: none; padding: 2px 0 2px; flex-direction: column; gap: 6px; }
+    .sec.open > .sec-body { display: flex; }
+
+    /* Config / onboarding rows */
+    .subhead { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--vscode-descriptionForeground); opacity: 0.6; padding: 2px 8px 0; }
+    .rows { display: flex; flex-direction: column; }
     .cfg-row {
       height: auto; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 4px;
       font-size: 12px; font-weight: 400; background: transparent; color: var(--vscode-foreground);
     }
     .cfg-row:hover { background: var(--vscode-list-hoverBackground); }
-    .cfg-row .val {
+    .rowlead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .rowlead .dot.okdot { background: var(--ok); }
+    .rowlead .dot.baddot { background: var(--bad); }
+    .val {
       color: var(--vscode-descriptionForeground); font-size: 11px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 52%;
     }
   </style>
 </head>
@@ -314,9 +361,17 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       </div>
     </div>
 
-    <div class="spacer"></div>
+    <div class="divider"></div>
 
-    <div class="group" id="config"></div>
+    <div class="sec" id="sec-config">
+      <button class="sec-hdr" data-key="config"><span class="chev">▶</span><span>Configuration</span></button>
+      <div class="sec-body"><div id="config"></div></div>
+    </div>
+
+    <div class="sec" id="sec-onboarding">
+      <button class="sec-hdr" data-key="onboarding"><span class="chev">▶</span><span>Onboarding</span><span class="sec-status"><span class="dot" id="ob-dot"></span></span></button>
+      <div class="sec-body"><div id="onboarding"></div></div>
+    </div>
   </div>
 
   <script nonce="${nonce}">
@@ -326,11 +381,36 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     const buildBtn = document.getElementById('build');
     const statusEl = document.getElementById('status');
     const cfgEl = document.getElementById('config');
+    const obEl = document.getElementById('onboarding');
+    const obDot = document.getElementById('ob-dot');
     let celebrateTimer;
     let running = false, canBuild = false, canRun = false;
 
     function send(command) { vscode.postMessage({ command }); }
 
+    // ---- Collapsible sections (state persisted) ----
+    function initCollapse() {
+      const saved = vscode.getState() || { config: true, onboarding: false };
+      document.querySelectorAll('.sec-hdr').forEach((h) => {
+        const key = h.dataset.key;
+        const sec = h.parentElement;
+        if (saved[key]) { sec.classList.add('open'); }
+        h.onclick = () => {
+          sec.classList.toggle('open');
+          const st = vscode.getState() || {};
+          st[key] = sec.classList.contains('open');
+          vscode.setState(st);
+        };
+      });
+    }
+    function expandOnboarding() {
+      const sec = document.getElementById('sec-onboarding');
+      sec.classList.add('open');
+      const st = vscode.getState() || {}; st.onboarding = true; vscode.setState(st);
+      sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ---- Build & Run enablement ----
     function applyEnable() {
       buildBtn.disabled = !canBuild;
       buildBtn.title = canBuild
@@ -341,7 +421,6 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         runBtn.title = canRun ? 'Launch the selected run target' : 'No run target — set up a project first';
       }
     }
-
     function setRunning(v) {
       running = v;
       runBtn.classList.toggle('stop', running);
@@ -351,21 +430,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       applyEnable();
     }
 
-    function chip(cls, title, cmd, text) {
-      const el = document.createElement('button');
-      el.className = 'chip ' + cls;
-      el.title = title;
-      const d = document.createElement('span'); d.className = 'dot'; el.appendChild(d);
-      if (text) {
-        const span = document.createElement('span');
-        if (typeof text === 'object') { span.className = text.cls; span.textContent = text.value; }
-        else { span.textContent = text; }
-        el.appendChild(span);
-      }
-      el.onclick = () => send(cmd);
-      return el;
-    }
-
+    // ---- Status readout ----
     function setStatus(s) {
       clearTimeout(celebrateTimer);
       statusEl.replaceChildren();
@@ -383,39 +448,63 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (s.readyCount > 0) {
-        statusEl.appendChild(chip('ready',
-          s.readyCount + ' of ' + s.total + ' ready — click to review in Onboarding',
-          'focusOnboarding', { cls: 'count', value: String(s.readyCount) }));
+        const c = document.createElement('button');
+        c.className = 'chip ready';
+        c.title = s.readyCount + ' of ' + s.total + ' ready — click to review in Onboarding';
+        const d = document.createElement('span'); d.className = 'dot'; c.appendChild(d);
+        const n = document.createElement('span'); n.className = 'count'; n.textContent = String(s.readyCount); c.appendChild(n);
+        c.onclick = expandOnboarding;
+        statusEl.appendChild(c);
       }
       for (const a of s.attention) {
-        statusEl.appendChild(chip(a.state, a.hint, a.cmd, a.label));
+        const p = document.createElement('button');
+        p.className = 'chip ' + a.state; p.title = a.hint;
+        const d = document.createElement('span'); d.className = 'dot'; p.appendChild(d);
+        const l = document.createElement('span'); l.textContent = a.label; p.appendChild(l);
+        p.onclick = () => send(a.cmd);
+        statusEl.appendChild(p);
       }
+    }
+
+    // ---- Row builders ----
+    function valueRow(r, withDot) {
+      const row = document.createElement('button'); row.className = 'cfg-row';
+      const lead = document.createElement('span'); lead.className = 'rowlead';
+      if (withDot && r.ok !== undefined) {
+        const d = document.createElement('span'); d.className = 'dot ' + (r.ok ? 'okdot' : 'baddot'); lead.appendChild(d);
+      }
+      const l = document.createElement('span'); l.textContent = r.label; lead.appendChild(l);
+      row.appendChild(lead);
+      if (r.value !== undefined) {
+        const v = document.createElement('span'); v.className = 'val'; v.textContent = r.value; row.appendChild(v);
+      }
+      row.onclick = () => send(r.cmd);
+      return row;
     }
 
     function setConfig(cfg) {
       canBuild = cfg.canBuild; canRun = cfg.canRun; applyEnable();
       cfgEl.replaceChildren();
-      const heading = document.createElement('div'); heading.className = 'label'; heading.textContent = 'Configuration';
-      cfgEl.appendChild(heading);
       for (const section of cfg.sections) {
-        const h = document.createElement('div');
-        h.className = 'label'; h.style.opacity = '0.65'; h.style.marginTop = '4px';
-        h.textContent = section.title;
-        cfgEl.appendChild(h);
-        const rows = document.createElement('div'); rows.className = 'cfg-rows';
-        for (const r of section.rows) {
-          const row = document.createElement('button'); row.className = 'cfg-row';
-          const l = document.createElement('span'); l.textContent = r.label; row.appendChild(l);
-          if (r.value !== undefined) {
-            const v = document.createElement('span'); v.className = 'val'; v.textContent = r.value; row.appendChild(v);
-          }
-          row.onclick = () => send(r.cmd);
-          rows.appendChild(row);
-        }
+        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = section.title; cfgEl.appendChild(h);
+        const rows = document.createElement('div'); rows.className = 'rows';
+        for (const r of section.rows) { rows.appendChild(valueRow(r, false)); }
         cfgEl.appendChild(rows);
       }
     }
 
+    function setOnboarding(ob) {
+      obDot.style.background = ob.complete ? 'var(--ok)' : 'var(--bad)';
+      obEl.replaceChildren();
+      for (const g of ob.groups) {
+        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = g.title; obEl.appendChild(h);
+        const rows = document.createElement('div'); rows.className = 'rows';
+        for (const r of g.rows) { rows.appendChild(valueRow(r, true)); }
+        obEl.appendChild(rows);
+      }
+    }
+
+    // ---- Wire static buttons ----
     buildBtn.onclick = () => { if (!buildBtn.disabled) { send('build'); } };
     runBtn.onclick = () => { if (!runBtn.disabled) { send(runBtn.dataset.cmd === 'stop' ? 'stop' : 'run'); } };
     document.getElementById('terminal').onclick = () => send('terminal');
@@ -429,9 +518,12 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       if (m.type === 'runState') { setRunning(m.running); }
       if (m.type === 'status') { setStatus(m); }
       if (m.type === 'config') { setConfig(m); }
+      if (m.type === 'onboarding') { setOnboarding(m); }
     });
 
+    initCollapse();
     setConfig(INITIAL.config);
+    setOnboarding(INITIAL.onboarding);
     setRunning(INITIAL.running);
     setStatus(INITIAL.status);
   </script>
