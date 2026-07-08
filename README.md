@@ -55,4 +55,4 @@ Install a `.vsix` locally via **Extensions view → ⋯ → Install from VSIX…
 
 ## License
 
-MIT © Gaian Helmers
+MIT © Genome Studios

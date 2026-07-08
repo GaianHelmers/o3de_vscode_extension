@@ -322,7 +322,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 
     /* Config / onboarding rows */
     .subhead { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-      color: var(--vscode-descriptionForeground); opacity: 0.6; padding: 2px 8px 0; }
+      color: var(--vscode-descriptionForeground); opacity: 0.6; padding: 0 8px 3px; margin-top: 16px; }
+    .subhead:first-child { margin-top: 2px; }
     .rows { display: flex; flex-direction: column; }
     .cfg-row {
       height: auto; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 4px;

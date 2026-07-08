@@ -3,12 +3,12 @@
   "displayName": "O3DE Development Tools",
   "description": "Developer companion for Open 3D Engine (O3DE) in Visual Studio Code.",
   "version": "0.0.1",
-  "publisher": "GaianHelmers",
+  "publisher": "GenomeStudios",
   "license": "MIT",
-  "author": "Gaian Helmers",
+  "author": "Genome Studios",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GaianHelmers/o3de_vscode_extension.git"
+    "url": "https://github.com/GenomeStudios/o3de_vscode_extension.git"
   },
   "engines": {
     "vscode": "^1.90.0"

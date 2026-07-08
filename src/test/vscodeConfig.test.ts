@@ -13,7 +13,7 @@ suite("buildProjectSettings", () => {
   test("uses the chosen generator; points cpptools at OUR provider (not CMake Tools), no n_cc", () => {
     assert.strictEqual(s["cmake.generator"], "Ninja Multi-Config");
     // Approach 2: cpptools → our live provider; NOT ms-vscode.cmake-tools (it can't build O3DE).
-    assert.strictEqual(s["C_Cpp.default.configurationProvider"], "GaianHelmers.o3de-development-tools");
+    assert.strictEqual(s["C_Cpp.default.configurationProvider"], "GenomeStudios.o3de-development-tools");
     assert.ok(!("C_Cpp.default.compileCommands" in s), "must not emit compileCommands (n_cc)");
     assert.strictEqual(s["cmake.configureOnOpen"], false); // stop CMake Tools' failing auto-configure
   });
