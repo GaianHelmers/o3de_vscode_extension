@@ -14,13 +14,17 @@ import { initLog, log } from "./log";
 import { ensureVisualStudio } from "./env/visualStudioGuard";
 import { openDeveloperTerminal } from "./env/developerTerminal";
 import { ensureNinja } from "./build/ninjaGuard";
-import { ToolingViewProvider } from "./view/toolingView";
+import { SectionTreeProvider, onboardingRoots } from "./view/toolingView";
+import { DashboardViewProvider } from "./view/dashboardView";
+import { OnboardingStatus } from "./view/onboardingStatus";
+import { openEditorLog, openErrorLog } from "./build/o3deLogs";
 import { runSetupWizard, addGemsToWorkspace } from "./workspace/setupWizard";
 import { writeProjectConfig } from "./build/writeProjectConfig";
 import { configureProject } from "./build/configure";
 import { buildProject } from "./build/build";
 import { selectTargets } from "./build/selectTargets";
 import { runProject, stopRun } from "./build/run";
+import { RunState } from "./build/runState";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
 import { registerConfigurationProvider } from "./intellisense/provider";
 import {
@@ -46,6 +50,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // Selectable build attributes (generator / config), shown in the O3DE tab.
   const buildOptions = new BuildOptions(context.workspaceState);
 
+  // Onboarding completion model (prerequisites + workspace) — drives the
+  // green/red markers and auto-collapse on the Onboarding section.
+  const onboarding = new OnboardingStatus(context.workspaceState);
+
+  // Live run state (Editor / GameLauncher up?) — toggles the toolbar's single
+  // Run slot between Play and Stop via the `o3de.appRunning` context key.
+  const runState = new RunState();
+
   // Command: "O3DE: Hello World".
   const helloWorld = vscode.commands.registerCommand("o3de.helloWorld", () => {
     log().info("Hello World command invoked.");
@@ -57,9 +69,18 @@ export function activate(context: vscode.ExtensionContext): void {
     log().show();
   });
 
+  // Commands: open the O3DE project's runtime logs (Editor.log / Error.log).
+  const showEditorLog = vscode.commands.registerCommand("o3de.showEditorLog", () => {
+    void openEditorLog();
+  });
+  const showErrorLog = vscode.commands.registerCommand("o3de.showErrorLog", () => {
+    void openErrorLog();
+  });
+
   // Command: "O3DE: Check Visual Studio" — re-run detection interactively.
-  const checkVs = vscode.commands.registerCommand("o3de.checkVisualStudio", () => {
-    void ensureVisualStudio({ interactive: true });
+  const checkVs = vscode.commands.registerCommand("o3de.checkVisualStudio", async () => {
+    await ensureVisualStudio({ interactive: true });
+    void onboarding.refresh();
   });
 
   // Command: "O3DE: Open Developer Terminal" — a terminal with the MSVC env ready.
@@ -68,8 +89,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Command: "O3DE: Check Ninja" — detect Ninja, offer to install it if missing.
-  const checkNinja = vscode.commands.registerCommand("o3de.checkNinja", () => {
-    void ensureNinja({ interactive: true });
+  const checkNinja = vscode.commands.registerCommand("o3de.checkNinja", async () => {
+    await ensureNinja({ interactive: true });
+    void onboarding.refresh();
   });
 
   // Command: "O3DE: Set Up Workspace…" — project + engine source → .code-workspace + .vscode config.
@@ -98,13 +120,15 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Command: "O3DE: Run" — launch the selected run target (detached, tracked for force-quit).
-  const run = vscode.commands.registerCommand("o3de.run", () => {
-    void runProject(buildOptions);
+  const run = vscode.commands.registerCommand("o3de.run", async () => {
+    await runProject(buildOptions);
+    void runState.refresh(); // flip the toolbar to Stop immediately
   });
 
   // Command: "O3DE: Stop" — force-quit the running app + its process tree (or sweep orphans).
-  const stop = vscode.commands.registerCommand("o3de.stopRun", () => {
-    void stopRun();
+  const stop = vscode.commands.registerCommand("o3de.stopRun", async () => {
+    await stopRun();
+    void runState.refresh(); // flip the toolbar back to Play immediately
   });
 
   // Command: "O3DE: Generate C++ IntelliSense" — File API reply → <project>/.vscode/c_cpp_properties.json.
@@ -169,11 +193,38 @@ export function activate(context: vscode.ExtensionContext): void {
   statusItem.command = "o3de.helloWorld";
   statusItem.show();
 
-  // O3DE activity-bar tab → "Tooling" view.
-  const toolingView = vscode.window.registerTreeDataProvider(
-    "o3de.tooling",
-    new ToolingViewProvider(buildOptions),
+  // O3DE activity-bar tab → Dashboard (webview: status + Build/Run + Utilities + Configuration).
+  const dashboardView = vscode.window.registerWebviewViewProvider(
+    DashboardViewProvider.viewType,
+    new DashboardViewProvider(runState, onboarding, buildOptions),
   );
+
+  // O3DE activity-bar tab → Onboarding tree (collapsible, below the Dashboard).
+  const onboardingView = vscode.window.createTreeView("o3de.onboarding", {
+    treeDataProvider: new SectionTreeProvider(
+      () => onboardingRoots(onboarding),
+      (fire) => onboarding.onDidChange(fire),
+    ),
+  });
+
+  // Badge the Onboarding view with the count of outstanding steps (the full
+  // message + lights live in the Dashboard). Clears when complete.
+  const updateOnboardingBadge = (): void => {
+    const pending = onboarding.pendingCount;
+    onboardingView.badge = pending
+      ? { value: pending, tooltip: `${pending} onboarding step(s) remaining` }
+      : undefined;
+  };
+  onboarding.onDidChange(updateOnboardingBadge);
+  updateOnboardingBadge();
+
+  // Prerequisites are detected in the background so the tree paints markers
+  // without spawning processes on every render; workspace changes re-render live.
+  void onboarding.refresh();
+  const foldersChanged = vscode.workspace.onDidChangeWorkspaceFolders(() => onboarding.notifyChanged());
+
+  // Begin watching run state so the Run/Stop toolbar toggle tracks the live app.
+  runState.start();
 
   // Low-cost IntelliSense refresh on startup (setting-gated): re-emit c_cpp_properties.json from the
   // existing File API reply so it tracks the last configure — no cmake reconfigure.
@@ -186,6 +237,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     buildOptions,
+    onboarding,
+    runState,
+    foldersChanged,
     helloWorld,
     showLog,
     checkVs,
@@ -204,7 +258,10 @@ export function activate(context: vscode.ExtensionContext): void {
     selectTargetsCmd,
     selectRunTarget,
     setLaunchArgs,
-    toolingView,
+    showEditorLog,
+    showErrorLog,
+    dashboardView,
+    onboardingView,
     statusItem,
   );
 }

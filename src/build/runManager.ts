@@ -28,6 +28,11 @@ export function isRunning(projectPath: string): boolean {
   return running.has(projectPath);
 }
 
+/** True if ANY project has a tracked (extension-launched) app live. */
+export function anyRunning(): boolean {
+  return running.size > 0;
+}
+
 export function runningLabel(projectPath: string): string | undefined {
   return running.get(projectPath)?.label;
 }

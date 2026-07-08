@@ -1,22 +1,19 @@
 // ============================================================================
-//  O3DE Tooling view — the tree shown in the O3DE activity-bar tab.
+//  O3DE Onboarding view — the collapsible tree at the bottom of the O3DE tab.
 //
-//  Structure:
-//    Workspace/        Set Up O3DE Workspace…
-//    Build Options/    Generator / Config / Targets: <value>   (click → dropdown/picker)
-//    Build/            Build   Write Project Config…   Configure Project   Generate C++ IntelliSense
-//    Run/              Run   Stop   Run Target: <value>   Launch Options: <value>
-//    Prerequisites/    Check Visual Studio   Check Ninja
-//    Open Developer Terminal   Show Log      (standalone)
+//    Onboarding/        (collapsed) — one-time startup; a red dot marks pending work
+//      Prerequisites/     Visual Studio + Ninja (auto-detected)
+//      Workspace/         Set Up O3DE Workspace… + Add Gems / Folders…
 //
-//  Build Options are dynamic — they show the current selection (from BuildOptions)
-//  and the tree refreshes when a selection changes.
+//  Build & Run, Utilities, and the Configuration list live in the Dashboard
+//  webview (see dashboardView.ts). This file backs only the Onboarding tree.
+//
+//  Onboarding status is dynamic — the provider rebuilds its roots fresh so the
+//  tree reflects the current completion.
 // ============================================================================
 
 import * as vscode from "vscode";
-import { BuildOptions } from "../build/buildOptions";
-import { targetsLabel } from "../build/buildCommand";
-import { runSummary, launchArgsLabel } from "../build/runCommand";
+import { OnboardingStatus } from "./onboardingStatus";
 
 // ---- Model -----------------------------------------------------------------
 interface ActionNode {
@@ -25,29 +22,73 @@ interface ActionNode {
   command: string;
   icon: string;
   tooltip?: string;
-  description?: string; // dimmed text after the label (e.g. current selection)
+  description?: string; // dimmed text after the label (e.g. current selection / status)
+  statusColor?: string; // ThemeColor id tinting the icon (e.g. "charts.green")
 }
 
 interface SectionNode {
   kind: "section";
   label: string;
   icon: string;
-  children: ActionNode[];
+  description?: string; // dimmed status text after the label
+  statusColor?: string; // ThemeColor id tinting the icon
+  children: Node[]; // sections may nest sections
 }
 
 type Node = SectionNode | ActionNode;
 
-// ---- Tree definition (built fresh so Build Options reflect current values) --
-function buildTree(options: BuildOptions): Node[] {
+// ---- Completion markers ----------------------------------------------------
+// A green filled check when done, a red dot when there's still work to do.
+const DONE_ICON = "pass-filled";
+const DONE_COLOR = "charts.green";
+const PENDING_ICON = "circle-filled";
+const PENDING_COLOR = "charts.red";
+
+function mark(done: boolean): { icon: string; statusColor: string } {
+  return done
+    ? { icon: DONE_ICON, statusColor: DONE_COLOR }
+    : { icon: PENDING_ICON, statusColor: PENDING_COLOR };
+}
+
+// ---- Onboarding roots ------------------------------------------------------
+export function onboardingRoots(status: OnboardingStatus): Node[] {
   return [
     {
       kind: "section",
+      label: "Prerequisites",
+      ...mark(status.prerequisitesComplete),
+      description: status.prerequisitesComplete ? "Ready" : "Action needed",
+      children: [
+        {
+          kind: "action",
+          label: "Visual Studio",
+          description: status.hasVisualStudio ? "ready" : "not found",
+          statusColor: status.hasVisualStudio ? DONE_COLOR : PENDING_COLOR,
+          command: "o3de.checkVisualStudio",
+          icon: status.hasVisualStudio ? "verified" : "warning",
+          tooltip: "Detect the Visual Studio (MSVC) toolchain",
+        },
+        {
+          kind: "action",
+          label: "Ninja",
+          description: status.hasNinja ? "installed" : "not found",
+          statusColor: status.hasNinja ? DONE_COLOR : PENDING_COLOR,
+          command: "o3de.checkNinja",
+          icon: status.hasNinja ? "verified" : "warning",
+          tooltip: "Detect Ninja, or offer to install it",
+        },
+      ],
+    },
+    {
+      kind: "section",
       label: "Workspace",
-      icon: "root-folder",
+      ...mark(status.workspaceComplete),
+      description: status.workspaceComplete ? "Configured" : "Action needed",
       children: [
         {
           kind: "action",
           label: "Set Up O3DE Workspace…",
+          description: workspaceSummary(status),
           command: "o3de.setupWorkspace",
           icon: "gear",
           tooltip: "Project + engine source → .code-workspace + .vscode/settings.json",
@@ -61,163 +102,30 @@ function buildTree(options: BuildOptions): Node[] {
         },
       ],
     },
-    {
-      kind: "section",
-      label: "Build Options",
-      icon: "settings",
-      children: [
-        {
-          kind: "action",
-          label: "Generator",
-          description: options.generator,
-          command: "o3de.selectGenerator",
-          icon: "server-process",
-          tooltip: "Choose the CMake generator (Ninja Multi-Config or Visual Studio)",
-        },
-        {
-          kind: "action",
-          label: "Config",
-          description: options.config,
-          command: "o3de.selectConfig",
-          icon: "symbol-enum",
-          tooltip: "Choose the build configuration (profile / debug / release)",
-        },
-        {
-          kind: "action",
-          label: "Targets",
-          description: targetsLabel(options.targets),
-          command: "o3de.selectTargets",
-          icon: "list-tree",
-          tooltip:
-            "Choose which CMake target(s) Build compiles (Editor, GameLauncher, a feature…). Select none = build everything.",
-        },
-      ],
-    },
-    {
-      kind: "section",
-      label: "Build",
-      icon: "gear",
-      children: [
-        {
-          kind: "action",
-          label: "Build",
-          description: `${targetsLabel(options.targets)} · ${options.config}`,
-          command: "o3de.build",
-          icon: "run-all",
-          tooltip:
-            "Build the selected target(s) with the current config — MSVC env + process-guard (mirrors your build .bat)",
-        },
-        {
-          kind: "action",
-          label: "Write Project Config (.vscode)",
-          command: "o3de.writeProjectConfig",
-          icon: "settings-gear",
-          tooltip: "Materialize .vscode: settings.json + launch.json (Editor/GameLauncher/Attach/ClassWizard) + O3DE snippets",
-        },
-        {
-          kind: "action",
-          label: "Configure Project",
-          command: "o3de.configureProject",
-          icon: "sync",
-          tooltip: "Run the CMake configure (build/<platform>) in an MSVC terminal — creates the build tree + File API",
-        },
-        {
-          kind: "action",
-          label: "Generate C++ IntelliSense",
-          command: "o3de.generateCppProperties",
-          icon: "symbol-namespace",
-          tooltip: "Parse the CMake File API → c_cpp_properties.json (engine paths resolve to the workspace source engine)",
-        },
-      ],
-    },
-    {
-      kind: "section",
-      label: "Run",
-      icon: "play-circle",
-      children: [
-        {
-          kind: "action",
-          label: "Run",
-          description: runSummary(options.runTarget, options.launchArgs),
-          command: "o3de.run",
-          icon: "play",
-          tooltip: "Launch the selected run target (detached). Use Stop to force-quit it and its child processes.",
-        },
-        {
-          kind: "action",
-          label: "Stop",
-          description: "force-quit",
-          command: "o3de.stopRun",
-          icon: "debug-stop",
-          tooltip: "Force-quit the running app and its whole process tree (Editor + AssetProcessor etc.)",
-        },
-        {
-          kind: "action",
-          label: "Run Target",
-          description: options.runTarget,
-          command: "o3de.selectRunTarget",
-          icon: "vm",
-          tooltip: "Choose what Run launches: Editor or the project's GameLauncher",
-        },
-        {
-          kind: "action",
-          label: "Launch Options",
-          description: launchArgsLabel(options.launchArgs),
-          command: "o3de.setLaunchArgs",
-          icon: "symbol-parameter",
-          tooltip: "Extra command-line args passed when running (e.g. +LoadLevel DefaultLevel +r_displayInfo 1)",
-        },
-      ],
-    },
-    {
-      kind: "section",
-      label: "Prerequisites",
-      icon: "checklist",
-      children: [
-        {
-          kind: "action",
-          label: "Check Visual Studio",
-          command: "o3de.checkVisualStudio",
-          icon: "verified",
-          tooltip: "Detect the Visual Studio (MSVC) toolchain",
-        },
-        {
-          kind: "action",
-          label: "Check Ninja",
-          command: "o3de.checkNinja",
-          icon: "tools",
-          tooltip: "Detect Ninja, or offer to install it",
-        },
-      ],
-    },
-    {
-      kind: "action",
-      label: "Open Developer Terminal",
-      command: "o3de.openDeveloperTerminal",
-      icon: "terminal",
-      tooltip: "Open a terminal with the MSVC environment established",
-    },
-    {
-      kind: "action",
-      label: "Show Log",
-      command: "o3de.showLog",
-      icon: "output",
-      tooltip: "Reveal the O3DE Development Tools output channel",
-    },
   ];
+}
+
+/** One-line "project ✓ · engine ✗" summary for the Set Up row. */
+function workspaceSummary(status: OnboardingStatus): string {
+  const project = status.hasProject ? "project ✓" : "project ✗";
+  const engine = status.hasEngineSource ? "engine ✓" : "engine ✗";
+  return `${project} · ${engine}`;
 }
 
 // ---- Tree item construction ------------------------------------------------
 function toTreeItem(node: Node): vscode.TreeItem {
   if (node.kind === "section") {
     const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
-    item.iconPath = new vscode.ThemeIcon(node.icon);
+    item.iconPath = themeIcon(node.icon, node.statusColor);
+    if (node.description !== undefined) {
+      item.description = node.description;
+    }
     item.contextValue = "section";
     return item;
   }
   const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
   item.command = { command: node.command, title: node.label };
-  item.iconPath = new vscode.ThemeIcon(node.icon);
+  item.iconPath = themeIcon(node.icon, node.statusColor);
   item.tooltip = node.tooltip ?? node.label;
   if (node.description !== undefined) {
     item.description = node.description;
@@ -226,13 +134,24 @@ function toTreeItem(node: Node): vscode.TreeItem {
   return item;
 }
 
-// ---- Provider (refreshes when a build option changes) ----------------------
-export class ToolingViewProvider implements vscode.TreeDataProvider<Node> {
+function themeIcon(icon: string, statusColor?: string): vscode.ThemeIcon {
+  return statusColor
+    ? new vscode.ThemeIcon(icon, new vscode.ThemeColor(statusColor))
+    : new vscode.ThemeIcon(icon);
+}
+
+// ---- Generic section-tree provider -----------------------------------------
+//  Renders a flat list of top-level Nodes (the view's roots), refreshing when
+//  the caller's source fires. One instance per view (Configuration / Onboarding).
+export class SectionTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
 
-  constructor(private readonly options: BuildOptions) {
-    options.onDidChange(() => this.changed.fire());
+  constructor(
+    private readonly roots: () => Node[],
+    subscribe: (fire: () => void) => void,
+  ) {
+    subscribe(() => this.changed.fire());
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
@@ -241,7 +160,7 @@ export class ToolingViewProvider implements vscode.TreeDataProvider<Node> {
 
   getChildren(node?: Node): Node[] {
     if (!node) {
-      return buildTree(this.options);
+      return this.roots();
     }
     return node.kind === "section" ? node.children : [];
   }
