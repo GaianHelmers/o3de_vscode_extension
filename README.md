@@ -2,15 +2,41 @@
 
 A developer companion for [Open 3D Engine (O3DE)](https://o3de.org) in Visual Studio Code.
 
-> ⚠️ **Early / experimental.** Scope and features are actively evolving.
+> 🧪 **Early / experimental.** Scope and features are actively evolving. Windows-focused (MSVC).
+
+Everything is driven from a single **O3DE Development Tools** panel in the activity bar: a Dashboard
+with live status, Build/Run, utilities, and collapsible Configuration & Onboarding sections.
+
+## Features
+
+- **Guided workspace setup** — assemble the multi-root workspace (project + engine source + gems)
+  into a `.code-workspace`, with `.vscode` settings generated for you.
+- **Windows MSVC environment** — auto-detects Visual Studio, opens a developer terminal with the
+  MSVC environment established; detects Ninja and offers to install it.
+- **One-click CMake configure & build** — selectable generator, config, and target(s), mirroring
+  O3DE's build flow, with a process-guard for locked build outputs.
+- **Run & force-quit** — launch the Editor or the project's GameLauncher (with custom launch
+  options) and stop the whole process tree (AssetProcessor and friends included).
+- **C++ IntelliSense** — generates `c_cpp_properties.json` from the CMake File API and registers a
+  live cpptools configuration provider; engine paths resolve to your source engine.
+- **Project config generation** — `.vscode` `settings.json` + `launch.json` (Editor / GameLauncher /
+  Attach / Class Creation Wizard) + O3DE code snippets.
+- **Quick access** — Editor / Error logs, the extension output channel, and keybindings for Build
+  (`Ctrl+Alt+B`) and Run (`Ctrl+Alt+R`).
 
 ## Planned features
 
-- Windows **MSVC environment bootstrap** for integrated terminals & build tasks
-- Reliable **CMake configure / build / launch** (Editor, GameLauncher) with correct targets
-- Full **C++ IntelliSense** for O3DE (wiring cpptools / clangd to the build)
-- **Lua** completion & IntelliSense driven by O3DE reflection
-- **Templates & a Class Creation Wizard** (components, EBuses, gems)
+- **Lua** completion & IntelliSense driven by O3DE reflection, a Lua **debugger** (DAP), and an
+  Editor "Open in VS Code" handoff.
+- **Reflection browser** — inspect reflected components, EBuses, and the BehaviorContext.
+- **Templates & a Class Creation Wizard** (components, EBuses, gems).
+- Broader cross-platform support.
+
+## Requirements
+
+Windows with **Visual Studio 2022** (Desktop development with C++), **CMake**, and optionally
+**Ninja**, plus a registered O3DE project and engine. The extension's Onboarding panel checks these
+for you and helps fill the gaps.
 
 ## Development
 
@@ -55,4 +81,11 @@ Install a `.vsix` locally via **Extensions view → ⋯ → Install from VSIX…
 
 ## License
 
-MIT © Genome Studios
+MIT © Genome Studios Inc
+
+## Disclaimer
+
+**This is an unofficial, community-built extension from Genome Studios Inc.** It is not an official
+O3DE implementation, and is not affiliated with, endorsed by, or sponsored by the Open 3D Foundation
+or the Linux Foundation. "O3DE", "Open 3D Engine", and the O3DE logo are trademarks of their
+respective owners and are used here only to identify the engine this tool supports.

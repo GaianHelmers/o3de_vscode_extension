@@ -1,11 +1,12 @@
 {
   "name": "o3de-development-tools",
   "displayName": "O3DE Development Tools",
-  "description": "Developer companion for Open 3D Engine (O3DE) in Visual Studio Code.",
+  "description": "Developer companion for Open 3D Engine (O3DE): guided workspace setup, one-click CMake build & run, and C++ IntelliSense — for VS Code on Windows.",
   "version": "0.0.1",
-  "publisher": "GenomeStudios",
+  "icon": "media/icon.png",
+  "publisher": "GenomeStudiosInc",
   "license": "MIT",
-  "author": "Genome Studios",
+  "author": "Genome Studios Inc",
   "repository": {
     "type": "git",
     "url": "https://github.com/GenomeStudios/o3de_vscode_extension.git"
@@ -155,6 +156,7 @@
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "npm run check-types && node esbuild.js --production",
+    "vsix": "vsce package",
     "check-types": "tsc --noEmit",
     "compile-tests": "tsc -p . --outDir out",
     "pretest": "npm run compile-tests && npm run compile",

@@ -2,8 +2,10 @@
 .vscode/**
 .vscode-test/**
 .vscode-test.mjs
+.claude/**
 .serena/**
 .mcp.json
+*.vsix
 src/**
 out/**
 node_modules/**
