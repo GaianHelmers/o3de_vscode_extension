@@ -1,72 +1,107 @@
 // ============================================================================
-//  New Lua script — create a boilerplate O3DE component script.
+//  New Lua script — open a fresh, UNSAVED Lua buffer (untitled).
 //
-//  Mirrors the "Lua Component Script" template the O3DE Asset Browser offers
-//  (LuaEditorSystemComponent.cpp): a table with Properties + OnActivate /
-//  OnDeactivate, returned at the end.
+//  We deliberately do NOT create a file in a predetermined location. Opening the
+//  Lua editor with no file gives you a blank, pliable buffer with the whole Lua
+//  environment staged (palette + IntelliSense); you save when ready and choose
+//  where. This suits Lua-only authors who touch no C++ and no fixed project layout.
+//
+//  Templates are verified against a real O3DE reflection dump: `log`,
+//  `TickBus.Connect`, `TransformBus.Event.Get/SetWorldTranslation`, `Vector3`.
 // ============================================================================
 
-import * as fs from "fs/promises";
-import * as path from "path";
 import * as vscode from "vscode";
-import { log } from "../log";
-import { detectProjectRoot } from "./projectPaths";
+import { LUA_PALETTE_VIEW_ID } from "./palette/luaPaletteProvider";
 
-function boilerplate(scriptName: string): string {
-  return `local ${scriptName} = {
+// ---- Templates -------------------------------------------------------------
+
+const COMPONENT_TEMPLATE = `local MyComponent = {
     Properties = {
-        -- Add reflected properties here, e.g.:
-        -- Speed = { default = 1.0, description = "Movement speed" },
+        -- Reflected properties show up in the entity's Lua Script component.
+        -- Example:  Speed = { default = 1.0, description = "Movement speed" },
     },
 }
 
-function ${scriptName}:OnActivate()
+function MyComponent:OnActivate()
+    -- Runs when the entity becomes active (e.g. entering Game Mode).
 end
 
-function ${scriptName}:OnDeactivate()
+function MyComponent:OnDeactivate()
+    -- Runs when the entity is deactivated. Disconnect any bus handlers here.
 end
 
-return ${scriptName}
+return MyComponent
 `;
+
+// A self-demonstrating sample: bobs the entity up and down every frame and logs
+// on activate. Good for verifying IntelliSense, the palette, and breakpoints.
+const SAMPLE_TEMPLATE = `local BobbingSample = {
+    Properties = {
+        Height = { default = 1.0, description = "How far the entity bobs up and down (metres)." },
+        Speed = { default = 2.0, description = "Bobbing speed." },
+    },
 }
 
-/** Prompt for a name/location, write the boilerplate, and open it. */
-export async function createNewLuaScript(defaultDir?: string): Promise<vscode.Uri | undefined> {
-  const projectRoot = detectProjectRoot();
-  const baseDir =
-    defaultDir ??
-    (projectRoot ? path.join(projectRoot, "Scripts") : undefined) ??
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+function BobbingSample:OnActivate()
+    -- Runs when the entity becomes active (entering Game Mode).
+    log("O3DE Lua sample: OnActivate on entity " .. tostring(self.entityId))
+    self.elapsed = 0.0
+    self.startPos = TransformBus.Event.GetWorldTranslation(self.entityId)
+    self.tickBusHandler = TickBus.Connect(self)
+end
 
-  if (!baseDir) {
-    void vscode.window.showErrorMessage("O3DE: open a project folder before creating a Lua script.");
-    return undefined;
-  }
+function BobbingSample:OnTick(deltaTime, timePoint)
+    -- Runs every frame. Set a BREAKPOINT on the "height" line below, then inspect
+    -- height, deltaTime and self in the Run and Debug > Variables panel.
+    self.elapsed = self.elapsed + deltaTime
+    local height = math.sin(self.elapsed * self.Properties.Speed) * self.Properties.Height
+    local pos = Vector3(self.startPos.x, self.startPos.y, self.startPos.z + height)
+    TransformBus.Event.SetWorldTranslation(self.entityId, pos)
+end
 
-  const name = await vscode.window.showInputBox({
-    title: "New O3DE Lua Script",
-    prompt: `Script name (created in ${baseDir})`,
-    placeHolder: "MyScript",
-    validateInput: (v) => (/^[A-Za-z_]\w*$/.test(v) ? undefined : "Use a valid identifier (letters, digits, underscore)."),
-  });
-  if (!name) {
-    return undefined;
-  }
+function BobbingSample:OnDeactivate()
+    if self.tickBusHandler ~= nil then
+        self.tickBusHandler:Disconnect()
+    end
+end
 
-  const filePath = path.join(baseDir, `${name}.lua`);
-  try {
-    await fs.mkdir(baseDir, { recursive: true });
-    try {
-      await fs.access(filePath); // exists → just open it
-    } catch {
-      await fs.writeFile(filePath, boilerplate(name), "utf8");
-      log().info(`Created Lua script ${filePath}`);
-    }
-    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
-    await vscode.window.showTextDocument(doc, { preview: false });
-    return doc.uri;
-  } catch (err) {
-    void vscode.window.showErrorMessage(`Failed to create ${filePath}: ${(err as Error).message}`);
-    return undefined;
+return BobbingSample
+`;
+
+// ---- Open an untitled Lua buffer + stage the environment -------------------
+
+async function openUntitledLua(content: string): Promise<void> {
+  const doc = await vscode.workspace.openTextDocument({ language: "lua", content });
+  await vscode.window.showTextDocument(doc, { preview: false });
+  // Stage the authoring environment: reveal the function palette alongside.
+  void vscode.commands.executeCommand(`${LUA_PALETTE_VIEW_ID}.focus`);
+}
+
+/** Command: pick a template and open it as a fresh unsaved Lua buffer. */
+export async function newLuaScript(): Promise<void> {
+  const pick = await vscode.window.showQuickPick(
+    [
+      { label: "$(file) Blank", detail: "An empty Lua buffer.", content: "" },
+      { label: "$(symbol-class) Component", detail: "OnActivate / OnDeactivate skeleton.", content: COMPONENT_TEMPLATE },
+      {
+        label: "$(debug-alt) Bobbing sample",
+        detail: "Moves the entity + logs — great for testing IntelliSense, the palette, and breakpoints.",
+        content: SAMPLE_TEMPLATE,
+      },
+    ],
+    { title: "New O3DE Lua Script", placeHolder: "Start from…" },
+  );
+  if (!pick) {
+    return;
   }
+  await openUntitledLua(pick.content);
+}
+
+/**
+ * Open the default Lua component template as a fresh UNSAVED buffer — used when
+ * O3DE opens the editor with no file. It's our predetermined default content,
+ * just not written anywhere yet; the user saves (and picks a location) when ready.
+ */
+export async function openDefaultLuaScript(): Promise<void> {
+  await openUntitledLua(COMPONENT_TEMPLATE);
 }

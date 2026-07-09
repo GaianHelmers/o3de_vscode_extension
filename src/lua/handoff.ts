@@ -19,7 +19,8 @@ import * as vscode from "vscode";
 import { log } from "../log";
 import { detectProjectRoot } from "./projectPaths";
 import { LUA_DEBUG_TYPE } from "./debug/debugAdapter";
-import { createNewLuaScript } from "./newScript";
+import { openDefaultLuaScript, newLuaScript } from "./newScript";
+import { LUA_PALETTE_VIEW_ID } from "./palette/luaPaletteProvider";
 
 const LUA_DEBUGGER_URI_KEY = "/O3DE/Lua/Debugger/Uri";
 
@@ -48,6 +49,9 @@ class LuaEditorUriHandler implements vscode.UriHandler {
       }
     }
 
+    // Pop open the function palette alongside the script (like LuaIDE's reference panel).
+    void vscode.commands.executeCommand(`${LUA_PALETTE_VIEW_ID}.focus`);
+
     if (firstDoc) {
       const choice = await vscode.window.showInformationMessage(
         `O3DE opened ${path.basename(firstDoc.uri.fsPath)} in VS Code.`,
@@ -65,16 +69,11 @@ class LuaEditorUriHandler implements vscode.UriHandler {
       return;
     }
 
-    // Case 2: no file (e.g. empty Script component, or Tools ▸ Lua Editor) —
-    // tell the user clearly and offer to create one.
-    const choice = await vscode.window.showInformationMessage(
-      "O3DE opened the Lua editor in VS Code. No script was specified — create a new one?",
-      "New Lua Script",
-      "Cancel",
-    );
-    if (choice === "New Lua Script") {
-      await createNewLuaScript();
-    }
+    // Case 2: no file (e.g. empty Script component, or Tools ▸ Lua Editor) — stage
+    // a fresh, unsaved Lua buffer with the default template. The user saves (and
+    // picks a location) when ready; we never write a file to a predetermined place.
+    await openDefaultLuaScript();
+    void vscode.window.setStatusBarMessage("O3DE: new Lua script — save when ready to choose its location.", 6000);
   }
 }
 
@@ -129,6 +128,6 @@ export function registerLuaHandoff(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("o3de.registerAsLuaEditor", () =>
       registerAsLuaEditor(context.extension.id),
     ),
-    vscode.commands.registerCommand("o3de.newLuaScript", () => createNewLuaScript()),
+    vscode.commands.registerCommand("o3de.newLuaScript", () => newLuaScript()),
   );
 }

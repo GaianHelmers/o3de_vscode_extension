@@ -73,7 +73,7 @@ export async function killByName(image: string): Promise<void> {
 // `code`/`code-insiders --open-url` the Editor later invokes — e.g. the O3DE
 // "Open Lua Editor" handoff — target VS Code's own CLI instead of the running
 // window, so the handoff silently dies. Strip them for a clean child env.
-function cleanChildEnv(): NodeJS.ProcessEnv {
+export function cleanChildEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith("VSCODE_") || key === "ELECTRON_RUN_AS_NODE") {

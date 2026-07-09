@@ -28,6 +28,9 @@ import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellis
 import { registerConfigurationProvider } from "./intellisense/provider";
 import { registerLuaDebug, debugLuaFile } from "./lua/debug/debugAdapter";
 import { registerLuaHandoff } from "./lua/handoff";
+import { generateLuaIntelliSense, generateLuaStubsFromDump } from "./lua/intellisense/intelliSense";
+import { LuaPaletteProvider, LUA_PALETTE_VIEW_ID, insertLuaSymbol } from "./lua/palette/luaPaletteProvider";
+import { DependencyStatus } from "./deps/dependencyStatus";
 import {
   BuildOptions,
   GENERATORS,
@@ -54,6 +57,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Onboarding completion model (prerequisites + workspace) — drives the
   // green/red markers and auto-collapse on the Onboarding section.
   const onboarding = new OnboardingStatus(context.workspaceState);
+
+  // Exhaustive dependency model behind the guided Setup ramp (detectors + tracks
+  // + intents + acquisition actions). Detect in the background on activation.
+  const deps = new DependencyStatus(context.workspaceState);
+  void deps.refresh();
 
   // Live run state (Editor / GameLauncher up?) — toggles the toolbar's single
   // Run slot between Play and Stop via the `o3de.appRunning` context key.
@@ -198,13 +206,16 @@ export function activate(context: vscode.ExtensionContext): void {
   // (status + Build/Run + Utilities + collapsible Configuration + Onboarding).
   const dashboardView = vscode.window.registerWebviewViewProvider(
     DashboardViewProvider.viewType,
-    new DashboardViewProvider(runState, onboarding, buildOptions),
+    new DashboardViewProvider(runState, onboarding, buildOptions, deps),
   );
 
   // Prerequisites are detected in the background so the tree paints markers
   // without spawning processes on every render; workspace changes re-render live.
   void onboarding.refresh();
-  const foldersChanged = vscode.workspace.onDidChangeWorkspaceFolders(() => onboarding.notifyChanged());
+  const foldersChanged = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    onboarding.notifyChanged();
+    void deps.refresh(); // project/engine presence can change with the folders
+  });
 
   // Begin watching run state so the Run/Stop toolbar toggle tracks the live app.
   runState.start();
@@ -225,9 +236,29 @@ export function activate(context: vscode.ExtensionContext): void {
     void debugLuaFile(uri);
   });
 
+  // Lua function palette — browsable Classes / EBuses / Globals tree (2nd O3DE view).
+  const luaPalette = new LuaPaletteProvider();
+  const luaPaletteView = vscode.window.registerTreeDataProvider(LUA_PALETTE_VIEW_ID, luaPalette);
+  const luaPaletteRefresh = vscode.commands.registerCommand("o3de.luaPalette.refresh", () => luaPalette.refresh());
+  const luaPaletteInsert = vscode.commands.registerCommand("o3de.luaPalette.insert", (text: string) =>
+    insertLuaSymbol(text),
+  );
+
+  // Lua IntelliSense: dump the reflected API (headless Editor) → LuaLS stubs.
+  // Refresh the palette afterwards so it populates from the fresh dump.
+  const genLuaIntelliSense = vscode.commands.registerCommand("o3de.generateLuaIntelliSense", async () => {
+    await generateLuaIntelliSense(context, buildOptions);
+    luaPalette.refresh();
+  });
+  const genLuaStubsFromDump = vscode.commands.registerCommand("o3de.generateLuaStubsFromDump", async () => {
+    await generateLuaStubsFromDump();
+    luaPalette.refresh();
+  });
+
   context.subscriptions.push(
     buildOptions,
     onboarding,
+    deps,
     runState,
     foldersChanged,
     helloWorld,
@@ -251,6 +282,11 @@ export function activate(context: vscode.ExtensionContext): void {
     showEditorLog,
     showErrorLog,
     debugLua,
+    genLuaIntelliSense,
+    genLuaStubsFromDump,
+    luaPaletteView,
+    luaPaletteRefresh,
+    luaPaletteInsert,
     dashboardView,
     statusItem,
   );

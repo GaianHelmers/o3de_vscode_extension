@@ -27,6 +27,12 @@ with live status, Build/Run, utilities, and collapsible Configuration & Onboardi
   companion gem): breakpoints, stepping, call stack, locals, watch, and edit-value, against a
   running Editor or GameLauncher. Plus an **"Open in VS Code" handoff** so the Editor's *Tools ▸ Lua
   Editor* and a Script component's *Edit* button open scripts here.
+- **Lua IntelliSense** — *O3DE: Generate Lua IntelliSense* dumps the engine's reflected scripting API
+  (classes, EBuses, globals) and generates LuaLS (sumneko) annotation stubs, so `.lua` scripts get
+  typed completion and hovers for the O3DE API — offline, no running Editor needed after the dump.
+- **Lua function palette** — a browsable, searchable *Classes / EBuses / Globals* tree in the O3DE
+  activity bar (the VS Code equivalent of the Lua IDE's Class Reference panel). Click a symbol to
+  insert a call snippet. Opens automatically when O3DE hands a script over.
 
 ### Debugging Lua
 
@@ -40,10 +46,22 @@ with live status, Build/Run, utilities, and collapsible Configuration & Onboardi
 Requires a **non-Release** Editor/Launcher build with the **RemoteTools gem** enabled (the default in
 O3DE's standard project templates). Debugging is localhost-only, one target at a time.
 
+### Lua IntelliSense & palette
+
+Run **O3DE: Generate Lua IntelliSense** — it launches the Editor headless, dumps the reflected API to
+`<project>/user/lua_symbols.json`, generates `.vscode/o3de-lua-stubs/o3de_api.lua`, and points the Lua
+language server at it. (Already have a dump? **O3DE: Generate Lua Stubs From Dump** skips the Editor.)
+The **Lua Palette** view in the O3DE activity bar then lets you browse and insert from the reflected API.
+
+Requires the [Lua language server](https://marketplace.visualstudio.com/items?itemName=sumneko.lua)
+(`sumneko.lua`) for completion.
+
+New to Lua? See the step-by-step [Lua Getting Started & Verification guide](docs/lua-getting-started.md) —
+it walks through authoring, attaching a script to an entity, running it, and hitting a breakpoint.
+
 ## Planned features
 
-- **Lua** completion & IntelliSense driven by O3DE reflection (LuaLS annotation stubs).
-- **Reflection browser** — inspect reflected components, EBuses, and the BehaviorContext.
+- **Reflection browser** — deeper inspection of reflected components and the BehaviorContext.
 - **Templates & a Class Creation Wizard** (components, EBuses, gems).
 - Broader cross-platform support.
 
@@ -54,9 +72,6 @@ Windows with **Visual Studio 2022** (Desktop development with C++), **CMake**, a
 for you and helps fill the gaps.
 
 ## Development
-
-Prerequisites: **Node.js** (npm). For building O3DE itself you also need
-**Visual Studio 2022** (Desktop C++), **CMake**, and (optionally) **Ninja**.
 
 ```bash
 npm install        # install dependencies

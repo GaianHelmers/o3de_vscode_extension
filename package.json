@@ -2,7 +2,7 @@
   "name": "o3de-development-tools",
   "displayName": "O3DE Development Tools",
   "description": "Developer companion for Open 3D Engine (O3DE): guided workspace setup, one-click CMake build & run, and C++ IntelliSense — for VS Code on Windows.",
-  "version": "0.0.4",
+  "version": "0.0.13",
   "icon": "media/icon.png",
   "publisher": "GenomeStudiosInc",
   "license": "MIT",
@@ -37,7 +37,7 @@
       "activitybar": [
         {
           "id": "o3de",
-          "title": "O3DE Development Tools",
+          "title": "O3DE Development Tools 0.0.13",
           "icon": "media/o3de.svg"
         }
       ]
@@ -48,7 +48,15 @@
           "id": "o3de.dashboard",
           "name": "O3DE Development Tools",
           "type": "webview",
-          "visibility": "visible"
+          "visibility": "visible",
+          "size": 1
+        },
+        {
+          "id": "o3de.luaPalette",
+          "name": "Lua Palette",
+          "type": "tree",
+          "visibility": "collapsed",
+          "size": 100
         }
       ]
     },
@@ -151,6 +159,19 @@
         "command": "o3de.newLuaScript",
         "title": "O3DE: New Lua Script",
         "icon": "$(new-file)"
+      },
+      {
+        "command": "o3de.generateLuaIntelliSense",
+        "title": "O3DE: Generate Lua IntelliSense"
+      },
+      {
+        "command": "o3de.generateLuaStubsFromDump",
+        "title": "O3DE: Generate Lua Stubs From Dump"
+      },
+      {
+        "command": "o3de.luaPalette.refresh",
+        "title": "O3DE: Refresh Lua Palette",
+        "icon": "$(refresh)"
       }
     ],
     "breakpoints": [
@@ -162,7 +183,9 @@
       {
         "type": "o3de-lua",
         "label": "O3DE Lua",
-        "languages": ["lua"],
+        "languages": [
+          "lua"
+        ],
         "configurationAttributes": {
           "attach": {
             "properties": {
@@ -226,15 +249,23 @@
           "when": "resourceLangId == lua",
           "group": "navigation@10"
         }
+      ],
+      "view/title": [
+        {
+          "command": "o3de.luaPalette.refresh",
+          "when": "view == o3de.luaPalette",
+          "group": "navigation"
+        }
       ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
+    "sync-title": "node scripts/sync-container-title.mjs",
+    "vscode:prepublish": "npm run sync-title && npm run package",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "npm run check-types && node esbuild.js --production",
-    "vsix": "vsce package",
+    "vsix": "npm run sync-title && vsce package",
     "check-types": "tsc --noEmit",
     "compile-tests": "tsc -p . --outDir out",
     "pretest": "npm run compile-tests && npm run compile",

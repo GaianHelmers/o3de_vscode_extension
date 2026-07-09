@@ -24,6 +24,9 @@ import { OnboardingStatus } from "./onboardingStatus";
 import { BuildOptions } from "../build/buildOptions";
 import { targetsLabel } from "../build/buildCommand";
 import { launchArgsLabel } from "../build/runCommand";
+import { DependencyStatus } from "../deps/dependencyStatus";
+import { buildOnboardingModel, actionFor, View } from "../deps/registry";
+import { runGuidedAction } from "../deps/actions";
 
 // ---- Webview → command dispatch table (whitelist) --------------------------
 const COMMANDS: Record<string, string> = {
@@ -46,6 +49,13 @@ const COMMANDS: Record<string, string> = {
   generateCppProperties: "o3de.generateCppProperties",
   selectRunTarget: "o3de.selectRunTarget",
   setLaunchArgs: "o3de.setLaunchArgs",
+  // Lua
+  registerAsLuaEditor: "o3de.registerAsLuaEditor",
+  newLuaScript: "o3de.newLuaScript",
+  debugLuaFile: "o3de.debugLuaFile",
+  generateLuaIntelliSense: "o3de.generateLuaIntelliSense",
+  generateLuaStubsFromDump: "o3de.generateLuaStubsFromDump",
+  openLuaPalette: "o3de.luaPalette.focus",
 };
 
 // ---- Inline icons (self-contained — no asset plumbing / CSP img-src) --------
@@ -137,6 +147,19 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
           { label: "Launch Options", value: launchArgsLabel(options.launchArgs), cmd: "setLaunchArgs" },
         ],
       },
+      {
+        // Provisional home for the Lua commands (per user: end of Configuration
+        // until a dedicated Lua UX lands).
+        title: "Lua",
+        rows: [
+          { label: "Register VS Code as Lua Editor", cmd: "registerAsLuaEditor" },
+          { label: "New Lua Script", cmd: "newLuaScript" },
+          { label: "Debug Lua File", cmd: "debugLuaFile" },
+          { label: "Generate Lua IntelliSense", cmd: "generateLuaIntelliSense" },
+          { label: "Generate Stubs From Dump", cmd: "generateLuaStubsFromDump" },
+          { label: "Open Lua Palette", cmd: "openLuaPalette" },
+        ],
+      },
     ],
   };
 }
@@ -173,6 +196,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     private readonly runState: RunState,
     private readonly onboarding: OnboardingStatus,
     private readonly options: BuildOptions,
+    private readonly deps: DependencyStatus,
   ) {
     this.lastComplete = onboarding.complete;
   }
@@ -182,10 +206,23 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     webview.options = { enableScripts: true };
     webview.html = this.html(webview);
 
-    webview.onDidReceiveMessage((msg: { command?: string }) => {
-      const command = msg.command ? COMMANDS[msg.command] : undefined;
-      if (command) {
-        void vscode.commands.executeCommand(command);
+    webview.onDidReceiveMessage((msg: { command?: string; view?: View; action?: string }) => {
+      if (msg.command) {
+        const command = COMMANDS[msg.command];
+        if (command) {
+          void vscode.commands.executeCommand(command);
+        }
+        return;
+      }
+      if (msg.view) {
+        void this.deps.setView(msg.view);
+        return;
+      }
+      if (msg.action) {
+        const action = actionFor(msg.action);
+        if (action) {
+          void runGuidedAction(action).then(() => this.deps.refresh());
+        }
       }
     });
 
@@ -199,6 +236,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       void webview.postMessage({ type: "config", ...configPayload(this.options, this.onboarding) });
     const postOnboarding = (): void =>
       void webview.postMessage({ type: "onboarding", ...onboardingPayload(this.onboarding) });
+    const postDeps = (): void =>
+      void webview.postMessage({ type: "deps", model: buildOnboardingModel(this.deps.resultMap, this.deps.view) });
 
     this.disposeSubs();
     this.subs.push(
@@ -209,6 +248,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         postOnboarding();
       }),
       this.options.onDidChange(() => postConfig()),
+      this.deps.onDidChange(() => postDeps()),
     );
     webviewView.onDidDispose(() => this.disposeSubs());
   }
@@ -230,7 +270,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       running: this.runState.isRunning,
       status: statusPayload(this.onboarding, false),
       config: configPayload(this.options, this.onboarding),
-      onboarding: onboardingPayload(this.onboarding),
+      deps: buildOnboardingModel(this.deps.resultMap, this.deps.view),
     });
 
     return `<!DOCTYPE html>
@@ -337,6 +377,55 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-descriptionForeground); font-size: 11px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 52%;
     }
+
+    /* ---- Guided setup ---- */
+    .intents { display: flex; gap: 6px; padding: 2px 4px 8px; }
+    .intent {
+      flex: 1 1 0; height: 30px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--vscode-panel-border);
+      color: var(--vscode-descriptionForeground); background: transparent;
+    }
+    .intent.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border-color: transparent; }
+    .intent:hover { background: var(--vscode-list-hoverBackground); }
+    .intent.on:hover { background: var(--vscode-button-hoverBackground); }
+    .viewmarker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--vscode-descriptionForeground); opacity: 0.7; padding: 0 4px 8px; }
+
+    .reports { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 8px; }
+    .rep { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 8px; border-radius: 11px;
+      border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
+    .rep .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .rep.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); }
+    .rep.ok .dot { background: var(--ok); }
+    .rep.no .dot { background: var(--bad); }
+
+    .next {
+      margin: 0 4px 10px; padding: 9px 10px; border-radius: 6px;
+      background: var(--vscode-inputValidation-infoBackground, rgba(100,150,255,0.08));
+      border: 1px solid var(--vscode-focusBorder);
+    }
+    .next .nlabel { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+    .next .nwhat { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; line-height: 1.4; }
+    .fixbtn {
+      height: 26px; padding: 0 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;
+      color: var(--vscode-button-foreground); background: var(--vscode-button-background);
+    }
+    .fixbtn:hover { background: var(--vscode-button-hoverBackground); }
+    .fixbtn.small { height: 22px; padding: 0 8px; font-weight: 400;
+      color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+    .fixbtn.small:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+    .dep-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .dep-row:hover { background: var(--vscode-list-hoverBackground); }
+    .dep-row .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+    .dep-row .dot.s-ok { background: var(--ok); }
+    .dep-row .dot.s-missing { background: var(--bad); }
+    .dep-row .dot.s-warn, .dep-row .dot.s-unknown { background: var(--warn); }
+    .dep-row .dot.s-absent { background: var(--vscode-descriptionForeground); opacity: 0.5; }
+    .dep-row .dlabel { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dep-row.isnext .dlabel { font-weight: 600; }
+    .dep-row .ddetail { color: var(--vscode-descriptionForeground); font-size: 10px; max-width: 40%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -369,9 +458,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       <div class="sec-body"><div id="config"></div></div>
     </div>
 
-    <div class="sec" id="sec-onboarding">
-      <button class="sec-hdr" data-key="onboarding"><span class="chev">▶</span><span>Onboarding</span><span class="sec-status"><span class="dot" id="ob-dot"></span></span></button>
-      <div class="sec-body"><div id="onboarding"></div></div>
+    <div class="sec open" id="sec-setup">
+      <button class="sec-hdr" data-key="setup"><span class="chev">▶</span><span>Setup &amp; Onboarding</span><span class="sec-status" id="setup-status"></span></button>
+      <div class="sec-body"><div id="deps"></div></div>
     </div>
   </div>
 
@@ -382,16 +471,18 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     const buildBtn = document.getElementById('build');
     const statusEl = document.getElementById('status');
     const cfgEl = document.getElementById('config');
-    const obEl = document.getElementById('onboarding');
-    const obDot = document.getElementById('ob-dot');
+    const depsEl = document.getElementById('deps');
+    const setupStatus = document.getElementById('setup-status');
     let celebrateTimer;
     let running = false, canBuild = false, canRun = false;
 
     function send(command) { vscode.postMessage({ command }); }
+    function sendView(view) { vscode.postMessage({ view }); }
+    function sendAction(id) { vscode.postMessage({ action: id }); }
 
     // ---- Collapsible sections (state persisted) ----
     function initCollapse() {
-      const saved = vscode.getState() || { config: true, onboarding: false };
+      const saved = vscode.getState() || { config: true, setup: true };
       document.querySelectorAll('.sec-hdr').forEach((h) => {
         const key = h.dataset.key;
         const sec = h.parentElement;
@@ -404,10 +495,10 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         };
       });
     }
-    function expandOnboarding() {
-      const sec = document.getElementById('sec-onboarding');
+    function expandSetup() {
+      const sec = document.getElementById('sec-setup');
       sec.classList.add('open');
-      const st = vscode.getState() || {}; st.onboarding = true; vscode.setState(st);
+      const st = vscode.getState() || {}; st.setup = true; vscode.setState(st);
       sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
@@ -454,7 +545,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         c.title = s.readyCount + ' of ' + s.total + ' ready — click to review in Onboarding';
         const d = document.createElement('span'); d.className = 'dot'; c.appendChild(d);
         const n = document.createElement('span'); n.className = 'count'; n.textContent = String(s.readyCount); c.appendChild(n);
-        c.onclick = expandOnboarding;
+        c.onclick = expandSetup;
         statusEl.appendChild(c);
       }
       for (const a of s.attention) {
@@ -494,14 +585,84 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    function setOnboarding(ob) {
-      obDot.style.background = ob.complete ? 'var(--ok)' : 'var(--bad)';
-      obEl.replaceChildren();
-      for (const g of ob.groups) {
-        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = g.title; obEl.appendChild(h);
-        const rows = document.createElement('div'); rows.className = 'rows';
-        for (const r of g.rows) { rows.appendChild(valueRow(r, true)); }
-        obEl.appendChild(rows);
+    // ---- Guided setup (intent ramp + acquisition) ----
+    function depRow(v) {
+      const row = document.createElement('div');
+      row.className = 'dep-row' + (v.isNext ? ' isnext' : '');
+      row.title = v.what + (v.detail ? '\\n\\n' + v.detail : '');
+      const dot = document.createElement('span'); dot.className = 'dot s-' + v.state; row.appendChild(dot);
+      const label = document.createElement('span'); label.className = 'dlabel'; label.textContent = v.label; row.appendChild(label);
+      if (v.detail && v.state === 'ok') {
+        const d = document.createElement('span'); d.className = 'ddetail'; d.textContent = v.detail; row.appendChild(d);
+      } else if (v.actionLabel && (v.state === 'missing' || v.state === 'warn' || v.state === 'absent' || v.state === 'unknown')) {
+        const b = document.createElement('button'); b.className = 'fixbtn small'; b.textContent = v.actionLabel;
+        b.onclick = () => sendAction(v.id); row.appendChild(b);
+      }
+      return row;
+    }
+
+    function setDeps(model) {
+      depsEl.replaceChildren();
+
+      // Track switcher (radio) — view/edit C++ OR Lua setup. The panel below
+      // shows only the selected track; the badges show both tracks' status.
+      const seg = document.createElement('div'); seg.className = 'intents';
+      const mk = (key, text) => {
+        const el = document.createElement('button');
+        el.className = 'intent' + (model.view === key ? ' on' : '');
+        el.textContent = text;
+        el.onclick = () => sendView(key);
+        return el;
+      };
+      seg.appendChild(mk('cpp', 'C++ setup'));
+      seg.appendChild(mk('lua', 'Lua setup'));
+      depsEl.appendChild(seg);
+
+      const marker = document.createElement('div'); marker.className = 'viewmarker';
+      marker.textContent = 'Showing ' + (model.view === 'cpp' ? 'C++' : 'Lua') + ' tools';
+      depsEl.appendChild(marker);
+
+      // Sub-reports (always both tracks): base / C++ / Lua ready + optionals count.
+      const reports = document.createElement('div'); reports.className = 'reports';
+      const rep = (ok, text) => {
+        const s = document.createElement('span'); s.className = 'rep ' + (ok ? 'ok' : 'no');
+        const d = document.createElement('span'); d.className = 'dot'; s.appendChild(d);
+        const t = document.createElement('span'); t.textContent = text; s.appendChild(t);
+        return s;
+      };
+      reports.appendChild(rep(model.readiness.base, 'Project ready'));
+      reports.appendChild(rep(model.readiness.cpp, 'C++ ready'));
+      reports.appendChild(rep(model.readiness.lua, 'Lua ready'));
+      const opt = model.readiness.optionals;
+      const optRep = document.createElement('span'); optRep.className = 'rep';
+      optRep.textContent = 'Optionals ' + opt.present + '/' + opt.total; reports.appendChild(optRep);
+      depsEl.appendChild(reports);
+      setupStatus.replaceChildren();
+      const sdot = document.createElement('span'); sdot.className = 'dot';
+      sdot.style.background = model.next ? 'var(--bad)' : 'var(--ok)'; setupStatus.appendChild(sdot);
+
+      // Next step — the single guided action to take now.
+      if (model.next) {
+        const card = document.createElement('div'); card.className = 'next';
+        const l = document.createElement('div'); l.className = 'nlabel'; l.textContent = 'Next: ' + model.next.label; card.appendChild(l);
+        const w = document.createElement('div'); w.className = 'nwhat'; w.textContent = model.next.what; card.appendChild(w);
+        const b = document.createElement('button'); b.className = 'fixbtn'; b.textContent = model.next.actionLabel;
+        b.onclick = () => sendAction(model.next.id); card.appendChild(b);
+        depsEl.appendChild(card);
+      }
+
+      // The ramp (necessities for the chosen intents).
+      const h1 = document.createElement('div'); h1.className = 'subhead'; h1.textContent = 'Required'; depsEl.appendChild(h1);
+      const ramp = document.createElement('div'); ramp.className = 'rows';
+      for (const v of model.ramp) { ramp.appendChild(depRow(v)); }
+      depsEl.appendChild(ramp);
+
+      // Optional extras.
+      if (model.optionals.length) {
+        const h2 = document.createElement('div'); h2.className = 'subhead'; h2.textContent = 'Optional'; depsEl.appendChild(h2);
+        const optRows = document.createElement('div'); optRows.className = 'rows';
+        for (const v of model.optionals) { optRows.appendChild(depRow(v)); }
+        depsEl.appendChild(optRows);
       }
     }
 
@@ -519,12 +680,12 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       if (m.type === 'runState') { setRunning(m.running); }
       if (m.type === 'status') { setStatus(m); }
       if (m.type === 'config') { setConfig(m); }
-      if (m.type === 'onboarding') { setOnboarding(m); }
+      if (m.type === 'deps') { setDeps(m.model); }
     });
 
     initCollapse();
     setConfig(INITIAL.config);
-    setOnboarding(INITIAL.onboarding);
+    setDeps(INITIAL.deps);
     setRunning(INITIAL.running);
     setStatus(INITIAL.status);
   </script>
