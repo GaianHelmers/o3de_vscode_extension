@@ -19,6 +19,9 @@ import {
   asBreakpointAck,
   asCallstack,
   asGetValueResult,
+  asRegisteredClasses,
+  asRegisteredEBuses,
+  asRegisteredGlobals,
   asStringList,
   encodeBreakpointRequest,
   encodeScriptDebugRequest,
@@ -133,6 +136,57 @@ suite("Lua protocol — ObjectStream round-trip", () => {
     assert.strictEqual(dv.elements.length, 2);
     assert.strictEqual(dv.elements[0].name, "health");
     assert.strictEqual(dv.elements[1].value, "Player");
+  });
+
+  test("RegisteredClasses result decodes (incl. Uuid typeId) — the live IntelliSense source", () => {
+    const typeId = "{8379EB7D-01FA-4538-B64B-A6543B4BE73D}";
+    const encoded = encodeObjectStream(MSG.ScriptDebugRegisteredClassesResult, {
+      MsgId: BigInt(crc32("ScriptDebugger")),
+      classes: [
+        {
+          name: "Vector3",
+          type: typeId,
+          methods: [{ name: "GetLength", info: "[=float] " }],
+          properties: [{ name: "x", isRead: true, isWrite: true }],
+        },
+      ],
+    });
+    const classes = asRegisteredClasses(parseMessage(encoded).obj);
+    assert.strictEqual(classes.length, 1);
+    assert.strictEqual(classes[0].name, "Vector3");
+    assert.strictEqual(classes[0].typeId, typeId); // Uuid leaf survived the round-trip
+    assert.strictEqual(classes[0].methods[0].name, "GetLength");
+    assert.strictEqual(classes[0].properties[0].isWrite, true);
+  });
+
+  test("RegisteredEBuses result decodes senders + flags", () => {
+    const encoded = encodeObjectStream(MSG.ScriptDebugRegisteredEBusesResult, {
+      MsgId: BigInt(crc32("ScriptDebugger")),
+      EBusses: [
+        {
+          name: "TransformBus",
+          canBroadcast: true,
+          canQueue: true,
+          hasHandler: false,
+          events: [{ name: "GetWorldTranslation", info: "[=Vector3] ", category: "Event" }],
+        },
+      ],
+    });
+    const ebuses = asRegisteredEBuses(parseMessage(encoded).obj);
+    assert.strictEqual(ebuses[0].name, "TransformBus");
+    assert.strictEqual(ebuses[0].canQueue, true);
+    assert.strictEqual(ebuses[0].events[0].category, "Event");
+  });
+
+  test("RegisteredGlobals result decodes methods + properties", () => {
+    const encoded = encodeObjectStream(MSG.ScriptDebugRegisteredGlobalsResult, {
+      MsgId: BigInt(crc32("ScriptDebugger")),
+      methods: [{ name: "Print", info: "AZStd::string message" }],
+      properties: [{ name: "g_const", isRead: true, isWrite: false }],
+    });
+    const globals = asRegisteredGlobals(parseMessage(encoded).obj);
+    assert.strictEqual(globals.methods[0].name, "Print");
+    assert.strictEqual(globals.properties[0].isWrite, false);
   });
 
   test("SetValue request encodes a DebugValue and round-trips", () => {

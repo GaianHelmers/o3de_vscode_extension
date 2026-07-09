@@ -74,47 +74,16 @@ const LOG_SVG =
   'stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10"/><path d="M3 8h10"/><path d="M3 12h7"/></svg>';
 
 // ---- Payloads --------------------------------------------------------------
-type LightState = "warn" | "bad";
-interface AttentionPill {
-  label: string;
-  state: LightState;
-  cmd: string;
-  hint: string;
-}
 interface StatusPayload {
-  justCompleted: boolean;
-  readyCount: number;
-  total: number;
-  attention: AttentionPill[];
+  base: boolean; // project + engine — the bare minimum (gates Build/Run)
+  cpp: boolean;
+  lua: boolean;
 }
 
-function workspaceSummary(o: OnboardingStatus): string {
-  return `${o.hasProject ? "project ✓" : "project ✗"} · ${o.hasEngineSource ? "engine ✓" : "engine ✗"}`;
-}
-
-function statusPayload(o: OnboardingStatus, justCompleted: boolean): StatusPayload {
-  const checks = [
-    { label: "Visual Studio", ok: o.hasVisualStudio, warn: false, cmd: "checkVs" },
-    { label: "Ninja", ok: o.hasNinja, warn: o.hasNinja && o.ninjaUpdateAvailable, cmd: "checkNinja" },
-    { label: "Project", ok: o.hasProject, warn: false, cmd: "setup" },
-    { label: "Engine", ok: o.hasEngineSource, warn: false, cmd: "setup" },
-  ];
-  const attention: AttentionPill[] = checks
-    .filter((c) => !c.ok || c.warn)
-    .map((c) => ({
-      label: c.label,
-      state: c.ok ? "warn" : "bad",
-      cmd: c.cmd,
-      hint: c.ok
-        ? `${c.label} — update available. Click to update.`
-        : `${c.label} — missing. Click to install / set up.`,
-    }));
-  return {
-    justCompleted,
-    readyCount: checks.filter((c) => c.ok && !c.warn).length,
-    total: checks.length,
-    attention,
-  };
+// The header readout: two ready/not statuses (C++ / Lua), from the deps model.
+function statusPayload(deps: DependencyStatus): StatusPayload {
+  const r = deps.readiness;
+  return { base: r.base, cpp: r.cpp, lua: r.lua };
 }
 
 function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
@@ -164,42 +133,17 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
   };
 }
 
-function onboardingPayload(o: OnboardingStatus) {
-  return {
-    complete: o.complete,
-    groups: [
-      {
-        title: "Prerequisites",
-        rows: [
-          { label: "Visual Studio", ok: o.hasVisualStudio, value: o.hasVisualStudio ? "ready" : "not found", cmd: "checkVs" },
-          { label: "Ninja", ok: o.hasNinja, value: o.hasNinja ? "installed" : "not found", cmd: "checkNinja" },
-        ],
-      },
-      {
-        title: "Workspace",
-        rows: [
-          { label: "Set Up O3DE Workspace…", ok: o.workspaceComplete, value: workspaceSummary(o), cmd: "setup" },
-          { label: "Add Gems / Folders…", cmd: "addGems" },
-        ],
-      },
-    ],
-  };
-}
-
 // ---- Provider --------------------------------------------------------------
 export class DashboardViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "o3de.dashboard";
   private subs: vscode.Disposable[] = [];
-  private lastComplete: boolean;
 
   constructor(
     private readonly runState: RunState,
     private readonly onboarding: OnboardingStatus,
     private readonly options: BuildOptions,
     private readonly deps: DependencyStatus,
-  ) {
-    this.lastComplete = onboarding.complete;
-  }
+  ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     const webview = webviewView.webview;
@@ -226,29 +170,22 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    const postStatus = (): void => {
-      const complete = this.onboarding.complete;
-      const justCompleted = complete && !this.lastComplete;
-      this.lastComplete = complete;
-      void webview.postMessage({ type: "status", ...statusPayload(this.onboarding, justCompleted) });
-    };
+    const postStatus = (): void =>
+      void webview.postMessage({ type: "status", ...statusPayload(this.deps) });
     const postConfig = (): void =>
       void webview.postMessage({ type: "config", ...configPayload(this.options, this.onboarding) });
-    const postOnboarding = (): void =>
-      void webview.postMessage({ type: "onboarding", ...onboardingPayload(this.onboarding) });
     const postDeps = (): void =>
       void webview.postMessage({ type: "deps", model: buildOnboardingModel(this.deps.resultMap, this.deps.view) });
 
     this.disposeSubs();
     this.subs.push(
       this.runState.onDidChange((running) => void webview.postMessage({ type: "runState", running })),
-      this.onboarding.onDidChange(() => {
-        postStatus();
-        postConfig(); // canBuild/canRun depend on onboarding (project presence)
-        postOnboarding();
-      }),
+      this.onboarding.onDidChange(() => postConfig()), // canBuild/canRun gate on project presence
       this.options.onDidChange(() => postConfig()),
-      this.deps.onDidChange(() => postDeps()),
+      this.deps.onDidChange(() => {
+        postStatus(); // the header C++/Lua readouts derive from deps
+        postDeps();
+      }),
     );
     webviewView.onDidDispose(() => this.disposeSubs());
   }
@@ -268,7 +205,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       `script-src 'nonce-${nonce}'; img-src ${webview.cspSource};`;
     const initial = JSON.stringify({
       running: this.runState.isRunning,
-      status: statusPayload(this.onboarding, false),
+      status: statusPayload(this.deps),
       config: configPayload(this.options, this.onboarding),
       deps: buildOnboardingModel(this.deps.resultMap, this.deps.view),
     });
@@ -473,7 +410,6 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     const cfgEl = document.getElementById('config');
     const depsEl = document.getElementById('deps');
     const setupStatus = document.getElementById('setup-status');
-    let celebrateTimer;
     let running = false, canBuild = false, canRun = false;
 
     function send(command) { vscode.postMessage({ command }); }
@@ -522,40 +458,22 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       applyEnable();
     }
 
-    // ---- Status readout ----
+    // ---- Status readout: two ready/not badges (C++ / Lua) ----
     function setStatus(s) {
-      clearTimeout(celebrateTimer);
       statusEl.replaceChildren();
-      if (s.attention.length === 0) {
-        const wrap = document.createElement('span');
-        wrap.className = 'allclear' + (s.justCompleted ? ' celebrate' : '');
-        const d = document.createElement('span'); d.className = 'dot'; wrap.appendChild(d);
-        const t = document.createElement('span');
-        t.textContent = s.justCompleted ? 'All systems go' : 'Ready';
-        wrap.appendChild(t);
-        statusEl.appendChild(wrap);
-        if (s.justCompleted) {
-          celebrateTimer = setTimeout(() => { wrap.classList.remove('celebrate'); t.textContent = 'Ready'; }, 4000);
-        }
-        return;
-      }
-      if (s.readyCount > 0) {
-        const c = document.createElement('button');
-        c.className = 'chip ready';
-        c.title = s.readyCount + ' of ' + s.total + ' ready — click to review in Onboarding';
-        const d = document.createElement('span'); d.className = 'dot'; c.appendChild(d);
-        const n = document.createElement('span'); n.className = 'count'; n.textContent = String(s.readyCount); c.appendChild(n);
-        c.onclick = expandSetup;
-        statusEl.appendChild(c);
-      }
-      for (const a of s.attention) {
-        const p = document.createElement('button');
-        p.className = 'chip ' + a.state; p.title = a.hint;
-        const d = document.createElement('span'); d.className = 'dot'; p.appendChild(d);
-        const l = document.createElement('span'); l.textContent = a.label; p.appendChild(l);
-        p.onclick = () => send(a.cmd);
-        statusEl.appendChild(p);
-      }
+      const badge = (ok, text) => {
+        const b = document.createElement('button');
+        b.className = 'chip' + (ok ? ' ready' : '');
+        b.title = text + (ok ? ' ready' : ' — open Setup to finish');
+        const d = document.createElement('span'); d.className = 'dot';
+        if (!ok) { d.style.background = 'var(--vscode-descriptionForeground)'; d.style.opacity = '0.5'; }
+        b.appendChild(d);
+        const t = document.createElement('span'); t.textContent = text; b.appendChild(t);
+        b.onclick = expandSetup;
+        return b;
+      };
+      statusEl.appendChild(badge(s.cpp, 'C++'));
+      statusEl.appendChild(badge(s.lua, 'Lua'));
     }
 
     // ---- Row builders ----

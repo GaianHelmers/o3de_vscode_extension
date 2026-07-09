@@ -64,6 +64,9 @@ function writeNode(w: ByteWriter, uuid: string, nameCrc: number, value: AzValue)
   const raw =
     kind === "string" ? new TextEncoder().encode(String(value ?? "")) :
     kind === "primitive" ? primitiveToBytes(cd, value) :
+    // Opaque leaf (e.g. AZ::Uuid): a compound with no reflected fields carrying a
+    // raw value we decoded to a Uuid/hex string — write those bytes back.
+    kind === "compound" && cd.elements.length === 0 && typeof value === "string" && value ? hexToBytes(value) :
     null;
 
   let flags = FLAG_ELEMENT_HEADER;
@@ -225,6 +228,10 @@ function readNode(r: ByteReader): DecodedNode | null {
   let value: AzValue;
   if (kind === "container") {
     value = children.map((c) => c.value);
+  } else if (kind === "compound" && cd.elements.length === 0 && raw && raw.length > 0) {
+    // Opaque leaf with no reflected sub-fields but a raw value — e.g. AZ::Uuid
+    // (16 bytes). Model as a Uuid string (or hex) so typeIds survive.
+    value = raw.length === 16 ? bytesToUuid(raw) : hex(raw);
   } else if (kind === "compound") {
     const obj: AzObject = {};
     for (const child of children) {
@@ -246,6 +253,20 @@ function readNode(r: ByteReader): DecodedNode | null {
   }
 
   return { uuid, nameCrc, value };
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Parse a Uuid ("{8-4-4-4-12}") or plain hex string back into bytes.
+function hexToBytes(text: string): Uint8Array {
+  const digits = text.replace(/[^0-9a-fA-F]/g, "");
+  const out = new Uint8Array(Math.floor(digits.length / 2));
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(digits.substr(i * 2, 2), 16);
+  }
+  return out;
 }
 
 function primitiveFromBytes(cd: ClassData, raw: Uint8Array | null): AzValue {

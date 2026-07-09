@@ -20,9 +20,10 @@ import { resolveProjectEngine } from "../../o3de/discovery";
 import { editorExeCandidates } from "../../build/runCommand";
 import { cleanChildEnv } from "../../build/runManager";
 import { O3deProject } from "../../o3de/identity";
-import { parseReflectionDump } from "./symbols";
+import { parseReflectionDump, ReflectionDump } from "./symbols";
 import { generateStubs } from "./stubGenerator";
 import { applyLuaIntelliSense } from "./luaLsConfig";
+import { scrapeReflectionFromEditor } from "./liveScrape";
 
 const DUMP_TIMEOUT_MS = 8 * 60 * 1000; // hard cap — a cold headless Editor boot can be minutes
 const DUMP_POLL_MS = 1500;
@@ -51,29 +52,72 @@ export async function generateLuaIntelliSense(
   }
 
   const dumpPath = dumpJsonPath(project);
-  let useExisting = false;
-  if (fs.existsSync(dumpPath)) {
-    const choice = await vscode.window.showQuickPick(
-      [
-        { label: "Refresh from the Editor", detail: "Run O3DE headless to re-scan the reflected API (slower, current).", refresh: true },
-        { label: "Reuse the existing dump", detail: dumpPath, refresh: false },
-      ],
-      { title: "O3DE: Generate Lua IntelliSense", placeHolder: "A reflection dump already exists." },
+  const hasExisting = fs.existsSync(dumpPath);
+
+  type Source = "live" | "headless" | "reuse";
+  const items: (vscode.QuickPickItem & { source: Source })[] = [
+    {
+      label: "$(plug) From the running Editor",
+      detail: "Fast — scrape the reflected API from a live Editor over RemoteTools (no boot). Editor must be running.",
+      source: "live",
+    },
+    {
+      label: "$(server-process) Headless Editor scan",
+      detail: "Launch O3DE headless to scan the reflected API (first run takes a few minutes).",
+      source: "headless",
+    },
+  ];
+  if (hasExisting) {
+    items.push({ label: "$(history) Reuse the existing dump", detail: dumpPath, source: "reuse" });
+  }
+  const choice = await vscode.window.showQuickPick(items, {
+    title: "O3DE: Generate Lua IntelliSense",
+    placeHolder: "Where should the reflected O3DE API come from?",
+  });
+  if (!choice) {
+    return;
+  }
+
+  if (choice.source === "reuse") {
+    await generateFromDumpFile(project.path, dumpPath);
+    return;
+  }
+  if (choice.source === "headless") {
+    if (await runEditorDump(context, project, options.config, dumpPath)) {
+      await generateFromDumpFile(project.path, dumpPath);
+    }
+    return;
+  }
+  // Live scrape from a running Editor, with a headless fallback offer.
+  const dump = await scrapeLive(project);
+  if (dump) {
+    await generateFromDump(project.path, dumpPath, dump);
+  } else {
+    const fallback = await vscode.window.showWarningMessage(
+      "Couldn't reach a running Editor. Run a headless scan instead?",
+      "Headless scan",
+      "Cancel",
     );
-    if (!choice) {
-      return;
-    }
-    useExisting = !choice.refresh;
-  }
-
-  if (!useExisting) {
-    const ok = await runEditorDump(context, project, options.config, dumpPath);
-    if (!ok) {
-      return;
+    if (fallback === "Headless scan" && (await runEditorDump(context, project, options.config, dumpPath))) {
+      await generateFromDumpFile(project.path, dumpPath);
     }
   }
+}
 
-  await generateFromDumpFile(project.path, dumpPath);
+// Scrape the live Editor with progress; returns undefined (and logs) on failure.
+async function scrapeLive(project: O3deProject): Promise<ReflectionDump | undefined> {
+  const engine = resolveProjectEngine(project);
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "O3DE: scraping the reflected API from the running Editor…" },
+    async () => {
+      try {
+        return await scrapeReflectionFromEditor({ projectPath: project.path, enginePath: engine?.path });
+      } catch (err) {
+        log().error(`Live reflection scrape failed: ${(err as Error).message}`);
+        return undefined;
+      }
+    },
+  );
 }
 
 // ---- Fast path: generate from an existing dump JSON ------------------------
@@ -107,6 +151,17 @@ async function generateFromDumpFile(projectPath: string, dumpPath: string): Prom
   } catch (err) {
     void vscode.window.showErrorMessage(`O3DE: could not read reflection dump — ${(err as Error).message}`);
     return;
+  }
+  await generateFromDump(projectPath, dumpPath, dump);
+}
+
+/** Persist the dump (so the palette + reuse see it), generate stubs, and wire LuaLS. */
+async function generateFromDump(projectPath: string, dumpPath: string, dump: ReflectionDump): Promise<void> {
+  try {
+    await fsp.mkdir(path.dirname(dumpPath), { recursive: true });
+    await fsp.writeFile(dumpPath, JSON.stringify(dump, null, 2), "utf8");
+  } catch (err) {
+    log().error(`Could not write ${dumpPath}: ${(err as Error).message}`);
   }
 
   const lua = generateStubs(dump);

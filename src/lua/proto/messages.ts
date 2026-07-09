@@ -146,3 +146,76 @@ export function asGetValueResult(obj: AzObject): DebugValue {
 export function asSetValueResult(obj: AzObject): { name: string; result: boolean } {
   return { name: String(obj.name ?? ""), result: Boolean(obj.result) };
 }
+
+// ---- Registered reflection results (live IntelliSense source) --------------
+// Same shape as the Python LuaSymbolsReporter dump — both come from
+// ScriptContextDebug's Enum* — so these map straight into a ReflectionDump.
+export interface WireMethod {
+  name: string;
+  info: string; // debugArgumentInfo
+}
+export interface WireProperty {
+  name: string;
+  isRead: boolean;
+  isWrite: boolean;
+}
+export interface WireClass {
+  name: string;
+  typeId: string;
+  methods: WireMethod[];
+  properties: WireProperty[];
+}
+export interface WireEBusSender extends WireMethod {
+  category: string; // "Event" | "Broadcast" | "Notification"
+}
+export interface WireEBus {
+  name: string;
+  canBroadcast: boolean;
+  canQueue: boolean;
+  hasHandler: boolean;
+  events: WireEBusSender[];
+}
+
+function toMethods(v: AzValue | undefined): WireMethod[] {
+  return (Array.isArray(v) ? (v as AzObject[]) : []).map((m) => ({
+    name: String(m.name ?? ""),
+    info: String(m.info ?? ""),
+  }));
+}
+function toProps(v: AzValue | undefined): WireProperty[] {
+  return (Array.isArray(v) ? (v as AzObject[]) : []).map((p) => ({
+    name: String(p.name ?? ""),
+    isRead: Boolean(p.isRead),
+    isWrite: Boolean(p.isWrite),
+  }));
+}
+
+export function asRegisteredClasses(obj: AzObject): WireClass[] {
+  const arr = Array.isArray(obj.classes) ? (obj.classes as AzObject[]) : [];
+  return arr.map((c) => ({
+    name: String(c.name ?? ""),
+    typeId: typeof c.type === "string" ? c.type : "",
+    methods: toMethods(c.methods),
+    properties: toProps(c.properties),
+  }));
+}
+
+export function asRegisteredEBuses(obj: AzObject): WireEBus[] {
+  // Field is spelled "EBusses" in the engine reflection.
+  const arr = Array.isArray(obj.EBusses) ? (obj.EBusses as AzObject[]) : [];
+  return arr.map((e) => ({
+    name: String(e.name ?? ""),
+    canBroadcast: Boolean(e.canBroadcast),
+    canQueue: Boolean(e.canQueue),
+    hasHandler: Boolean(e.hasHandler),
+    events: (Array.isArray(e.events) ? (e.events as AzObject[]) : []).map((s) => ({
+      name: String(s.name ?? ""),
+      info: String(s.info ?? ""),
+      category: String(s.category ?? ""),
+    })),
+  }));
+}
+
+export function asRegisteredGlobals(obj: AzObject): { methods: WireMethod[]; properties: WireProperty[] } {
+  return { methods: toMethods(obj.methods), properties: toProps(obj.properties) };
+}

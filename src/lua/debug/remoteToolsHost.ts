@@ -32,10 +32,17 @@ import {
   DebugValue,
   MSG,
   ParsedMessage,
+  WireClass,
+  WireEBus,
+  WireMethod,
+  WireProperty,
   asAck,
   asBreakpointAck,
   asCallstack,
   asGetValueResult,
+  asRegisteredClasses,
+  asRegisteredEBuses,
+  asRegisteredGlobals,
   asSetValueResult,
   asStringList,
   encodeBreakpointRequest,
@@ -61,6 +68,9 @@ export interface RemoteToolsHostEvents {
   contexts: [names: string[]];
   value: [value: DebugValue];
   setValueResult: [name: string, ok: boolean];
+  registeredClasses: [classes: WireClass[]];
+  registeredEBuses: [ebuses: WireEBus[]];
+  registeredGlobals: [globals: { methods: WireMethod[]; properties: WireProperty[] }];
   disconnected: [];
   error: [message: string];
 }
@@ -206,8 +216,16 @@ export class RemoteToolsHost extends EventEmitter {
         this.emit("setValueResult", r.name, r.result);
         break;
       }
+      case MSG.ScriptDebugRegisteredClassesResult:
+        this.emit("registeredClasses", asRegisteredClasses(msg.obj));
+        break;
+      case MSG.ScriptDebugRegisteredEBusesResult:
+        this.emit("registeredEBuses", asRegisteredEBuses(msg.obj));
+        break;
+      case MSG.ScriptDebugRegisteredGlobalsResult:
+        this.emit("registeredGlobals", asRegisteredGlobals(msg.obj));
+        break;
       default:
-        // Registered-classes/EBuses/globals results land here — wired in a later stage.
         break;
     }
   }
@@ -248,6 +266,19 @@ export class RemoteToolsHost extends EventEmitter {
 
   enumContexts(): void {
     this.sendMessage(encodeScriptDebugRequest(CMD.EnumContexts));
+  }
+
+  // Reflected-API enumeration — the live IntelliSense source. Valid once attached.
+  enumRegisteredClasses(context = "Default"): void {
+    this.sendMessage(encodeScriptDebugRequest(CMD.EnumRegisteredClasses, context));
+  }
+
+  enumRegisteredEBuses(context = "Default"): void {
+    this.sendMessage(encodeScriptDebugRequest(CMD.EnumRegisteredEBuses, context));
+  }
+
+  enumRegisteredGlobals(context = "Default"): void {
+    this.sendMessage(encodeScriptDebugRequest(CMD.EnumRegisteredGlobals, context));
   }
 
   addBreakpoint(module: string, line: number): void {
