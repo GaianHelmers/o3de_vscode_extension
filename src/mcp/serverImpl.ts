@@ -29,6 +29,7 @@ const SESSION_HEADER = "mcp-session-id";
 export interface McpHttpOptions {
   port: number;
   token: string;
+  requireToken: boolean; // when false, the localhost bind is the only gate (no 401 → no OAuth cascade)
   version: string;
   buildOptions: BuildOptions;
 }
@@ -61,14 +62,23 @@ export async function startMcpHttpServer(opts: McpHttpOptions): Promise<McpHttpH
   };
 }
 
-/** Bind to the requested port on localhost; fall back to a free port if it's busy. */
+/**
+ * Bind to the requested port on localhost. NO ephemeral fallback: the client's
+ * .mcp.json is pasted once, so the port must be stable — a random fallback would
+ * silently break the saved config. If the port is busy (usually a stale window
+ * still holding it), fail with a clear, actionable error.
+ */
 function listen(server: http.Server, port: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const onError = (err: NodeJS.ErrnoException): void => {
       server.removeListener("error", onError);
-      if (err.code === "EADDRINUSE" && port !== 0) {
-        log().warn(`LLM (MCP) port ${port} is busy — falling back to a free port.`);
-        resolve(listen(server, 0));
+      if (err.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `port ${port} is already in use — another O3DE window (or process) is holding it. ` +
+              `Close extra windows, or change o3de.llm.port.`,
+          ),
+        );
       } else {
         reject(err);
       }
@@ -88,14 +98,25 @@ async function handleRequest(
   opts: McpHttpOptions,
   sessions: Map<string, StreamableHTTPServerTransport>,
 ): Promise<void> {
-  // Auth: every request must carry the bearer token (localhost bind is not enough
-  // on its own — any local process could otherwise drive builds).
-  if (req.headers["authorization"] !== `Bearer ${opts.token}`) {
-    sendJson(res, 401, { error: "unauthorized" });
+  const path = (req.url ?? "").split("?")[0];
+  const authOk = !opts.requireToken || req.headers["authorization"] === `Bearer ${opts.token}`;
+  log().debug(`MCP ${req.method} ${path} — ${opts.requireToken ? (authOk ? "auth ok" : "bad/missing token") : "no-auth"}`);
+
+  // Path FIRST, before any auth check. MCP clients probe OAuth discovery URLs
+  // (e.g. /.well-known/oauth-protected-resource) on connect; a 401 there makes
+  // the client think the server speaks OAuth and sends it into a broken auth
+  // flow that stalls initialize. A 404 says "no OAuth here" → it just uses the
+  // bearer header we configured and proceeds.
+  if (path !== MCP_PATH && path !== `${MCP_PATH}/`) {
+    sendJson(res, 404, { error: "not found" });
     return;
   }
-  if (!(req.url ?? "").startsWith(MCP_PATH)) {
-    sendJson(res, 404, { error: "not found" });
+
+  // Bearer auth for the MCP endpoint itself (localhost bind is not enough alone —
+  // any local process could otherwise drive builds). Plain 401, no OAuth pointer.
+  if (!authOk) {
+    res.setHeader("WWW-Authenticate", 'Bearer realm="o3de-development-tools"');
+    sendJson(res, 401, { error: "unauthorized" });
     return;
   }
 

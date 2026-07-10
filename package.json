@@ -34,12 +34,22 @@
         "o3de.llm.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "**Allow LLM connections.** Expose a local [MCP](https://modelcontextprotocol.io) endpoint on `127.0.0.1` so an assistant like Claude can trigger builds and read back structured results — no rebuilt scripts. **Off by default**; the endpoint binds to localhost and requires a bearer token. Run **O3DE: Show LLM Connection Info** for the client config. Toggle from the Onboarding ▸ Optional section."
+          "markdownDescription": "**Allow LLM connections.** Expose a local [MCP](https://modelcontextprotocol.io) endpoint on `127.0.0.1` so an assistant like Claude can trigger builds and read back structured results — no rebuilt scripts. **Off by default**; the endpoint binds to localhost only. Run **O3DE: Show LLM Connection Info** for the client config. Toggle from the Onboarding ▸ Optional section."
         },
         "o3de.llm.port": {
           "type": "number",
-          "default": 8975,
-          "markdownDescription": "TCP port for the local LLM (MCP) endpoint on `127.0.0.1`. Only used when `#o3de.llm.enabled#` is on. If the port is busy, the extension falls back to a free one and the actual URL is shown by **O3DE: Show LLM Connection Info**."
+          "default": 0,
+          "markdownDescription": "TCP port for the local LLM (MCP) endpoint on `127.0.0.1` (only used when `#o3de.llm.enabled#` is on). **`0` = auto:** derive a **stable per-project port** so multiple VS Code windows (one per O3DE project) each get their own endpoint and never collide — the port stays the same across reloads, so each project's pasted `.mcp.json` keeps working. Set a specific number to pin the port for this project. Run **O3DE: Show LLM Connection Info** to see the resolved port."
+        },
+        "o3de.llm.requireToken": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Require a bearer token on the LLM (MCP) endpoint. **Off by default** — the endpoint is bound to `127.0.0.1` (local only), and some MCP clients mishandle a token by falling into an OAuth flow. Turn on only if you want the extra gate and your client sends the `Authorization` header from its config."
+        },
+        "o3de.llm.writeMcpConfig": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When LLM connections are enabled, automatically write/merge the `o3de` server entry into your project's `.mcp.json` (created if absent, other servers preserved) so a client like Claude Code finds it with no copy-paste. Disabling LLM connections removes the entry again. Turn this off to manage `.mcp.json` yourself (use **O3DE: Show LLM Connection Info** to copy the block)."
         }
       }
     },

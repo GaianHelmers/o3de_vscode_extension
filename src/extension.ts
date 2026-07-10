@@ -78,9 +78,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const mcpServer = new O3deMcpServer(context, buildOptions);
   const reconcileMcp = async (): Promise<void> => {
     if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
-      await mcpServer.restart(); // idempotent start + picks up a changed port
+      await mcpServer.restart(); // idempotent start + picks up a changed port; writes .mcp.json
     } else {
       await mcpServer.stop();
+      mcpServer.removeClientConfig(); // clean the o3de entry out of .mcp.json on disable
     }
     void deps.refresh(); // refresh the Optional row's dot/detail
   };
@@ -88,7 +89,11 @@ export function activate(context: vscode.ExtensionContext): void {
     void mcpServer.start();
   }
   const mcpConfigListener = vscode.workspace.onDidChangeConfiguration((e) => {
-    if (e.affectsConfiguration("o3de.llm.enabled") || e.affectsConfiguration("o3de.llm.port")) {
+    if (
+      e.affectsConfiguration("o3de.llm.enabled") ||
+      e.affectsConfiguration("o3de.llm.port") ||
+      e.affectsConfiguration("o3de.llm.requireToken")
+    ) {
       void reconcileMcp();
     }
   });
