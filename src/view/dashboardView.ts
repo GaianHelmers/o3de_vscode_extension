@@ -28,6 +28,7 @@ import { launchArgsLabel } from "../build/runCommand";
 import { DependencyStatus } from "../deps/dependencyStatus";
 import { buildOnboardingModel, resolveGuidedAction, View } from "../deps/registry";
 import { runGuidedAction } from "../deps/actions";
+import { loadIcon } from "./svgAssets";
 
 // ---- Webview → command dispatch table (whitelist) --------------------------
 const COMMANDS: Record<string, string> = {
@@ -59,48 +60,6 @@ const COMMANDS: Record<string, string> = {
   generateLuaIntelliSense: "o3de.generateLuaIntelliSense",
   generateLuaStubsFromDump: "o3de.generateLuaStubsFromDump",
 };
-
-// ---- Inline icons (self-contained — no asset plumbing / CSP img-src) --------
-const TOOLS_SVG =
-  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 1 0 1.4l-.7.7a1 1 0 0 1-1.4 0l-1.6-1.6a1 1 0 0 0-1.4 0' +
-  'L5 18.3a2.12 2.12 0 0 1-3-3l6.3-6.3a1 1 0 0 0 0-1.4L5.7 6a1 1 0 0 1 0-1.4l.7-.7a1 1 0 0 1 1.4 0L9.4 5.5' +
-  'a1 1 0 0 0 1.4 0l2.9-2.9a5 5 0 0 0-6.6 6.6"/></svg>';
-const TERMINAL_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M3 4l3.5 4L3 12"/><path d="M8.5 12H13"/></svg>';
-const LOG_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10"/><path d="M3 8h10"/><path d="M3 12h7"/></svg>';
-// Document page (Editor Log).
-const DOC_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M9 1.5H4.5A1.5 1.5 0 0 0 3 3v10a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 13V5.5z"/>' +
-  '<path d="M9 1.5V5.5H13"/><path d="M5.5 8.5h5"/><path d="M5.5 11h5"/></svg>';
-// Circle with an X — error (Error Log).
-const ERROR_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/>' +
-  '<path d="M5.8 5.8 10.2 10.2M10.2 5.8 5.8 10.2"/></svg>';
-// Magic wand (Class Creation Wizard).
-const WAND_SVG =
-  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/>' +
-  '<path d="M17.8 11.8 19 13"/><path d="M15 9h.01"/><path d="M17.8 6.2 19 5"/>' +
-  '<path d="m3 21 9-9"/><path d="M12.2 6.2 11 5"/></svg>';
-// Line-art bug — the common Run-and-Debug glyph (matches codicon `bug`/`debug-alt`).
-const BUG_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
-  'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
-  '<ellipse cx="8" cy="9" rx="3.2" ry="4"/><path d="M8 6v7"/>' +
-  '<path d="M5.2 4.2a2.8 2.8 0 0 1 5.6 0"/>' +
-  '<path d="M6.3 3.4 5 1.8"/><path d="M9.7 3.4 11 1.8"/>' +
-  '<path d="M4.9 7.2 2.4 6"/><path d="M4.8 9.2 2.2 9.4"/><path d="M4.9 11 2.6 12.4"/>' +
-  '<path d="M11.1 7.2 13.6 6"/><path d="M11.2 9.2 13.8 9.4"/><path d="M11.1 11 13.4 12.4"/></svg>';
 
 // ---- Payloads --------------------------------------------------------------
 interface StatusPayload {
@@ -183,6 +142,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     private readonly deps: DependencyStatus,
     // Section collapse state persists here so it survives full VS Code restarts.
     private readonly memento: vscode.Memento,
+    private readonly extensionUri: vscode.Uri, // for media/icons/*.svg
+    private readonly version: string, // shown in the panel footer (runtime, from package.json)
   ) {}
 
   private getCollapse(): Record<string, boolean> {
@@ -289,6 +250,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       deps: buildOnboardingModel(this.deps.resultMap, this.deps.view),
       collapse: this.getCollapse(),
     });
+    const icon = (name: string): string => loadIcon(this.extensionUri, name);
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -369,6 +331,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 
     .divider { height: 1px; background: var(--vscode-panel-border); margin: 2px 0; opacity: 0.7; }
     .divider.wide { margin: 14px 0 8px; }
+
+    .appfoot { text-align: center; font-size: 10px; letter-spacing: 0.03em;
+      color: var(--vscode-descriptionForeground); opacity: 0.55; padding: 8px 0 2px; }
 
     /* Collapsible sections */
     .sec { display: flex; flex-direction: column; }
@@ -464,20 +429,20 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         <span class="status" id="status"></span>
       </div>
       <div class="row">
-        <button id="build" class="primary" title="Build the selected target(s) with the current config">${TOOLS_SVG}<span>Build</span></button>
+        <button id="build" class="primary" title="Build the selected target(s) with the current config">${icon("tools")}<span>Build</span></button>
         <button id="run" class="primary" title="Launch the selected run target"><span>▶ Run</span></button>
       </div>
     </div>
 
     <div class="group">
       <div class="label">Utilities</div>
-      <button id="classWizard" class="wide" title="Scaffold a new O3DE component/EBus class (Reflect boilerplate, m_ prefixes)">${WAND_SVG}<span>Class Creation Wizard</span></button>
+      <button id="classWizard" class="wide" title="Scaffold a new O3DE component/EBus class (Reflect boilerplate, m_ prefixes)">${icon("wand")}<span>Class Creation Wizard</span></button>
       <div class="row">
-        <button id="log" class="icon" title="Reveal the O3DE Development Tools output channel">${LOG_SVG}</button>
-        <button id="terminal" class="icon" title="Open a terminal with the MSVC environment established">${TERMINAL_SVG}</button>
-        <button id="editorLog" class="icon" title="Open the O3DE Editor.log for this project">${DOC_SVG}</button>
-        <button id="errorLog" class="icon" title="Open the O3DE Error.log for this project">${ERROR_SVG}</button>
-        <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">${BUG_SVG}</button>
+        <button id="log" class="icon" title="Reveal the O3DE Development Tools output channel">${icon("log")}</button>
+        <button id="terminal" class="icon" title="Open a terminal with the MSVC environment established">${icon("terminal")}</button>
+        <button id="editorLog" class="icon" title="Open the O3DE Editor.log for this project">${icon("doc")}</button>
+        <button id="errorLog" class="icon" title="Open the O3DE Error.log for this project">${icon("error")}</button>
+        <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">${icon("bug")}</button>
       </div>
     </div>
 
@@ -497,6 +462,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       <button class="sec-hdr" data-key="setup"><span class="chev">▶</span><span>Setup &amp; Onboarding</span><span class="hdr-actions"><span class="hdr-rescan" id="setup-rescan" title="Re-scan dependencies (e.g. after enabling a gem or generating a dump)">↻</span><span class="sec-status" id="setup-status"></span></span></button>
       <div class="sec-body"><div id="deps"></div></div>
     </div>
+
+    <div class="appfoot">O3DE Development Tools · v${this.version}</div>
   </div>
 
   <script nonce="${nonce}">

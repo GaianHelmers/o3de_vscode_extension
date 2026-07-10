@@ -57,7 +57,7 @@
       "activitybar": [
         {
           "id": "o3de",
-          "title": "O3DE Development Tools 0.1.0",
+          "title": "O3DE Development Tools",
           "icon": "media/o3de.svg"
         }
       ]
@@ -310,12 +310,11 @@
     }
   },
   "scripts": {
-    "sync-title": "node scripts/sync-container-title.mjs",
-    "vscode:prepublish": "npm run sync-title && npm run package",
+    "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "npm run check-types && node esbuild.js --production",
-    "vsix": "npm run sync-title && vsce package",
+    "vsix": "vsce package",
     "check-types": "tsc --noEmit",
     "compile-tests": "tsc -p . --outDir out",
     "pretest": "npm run compile-tests && npm run compile",

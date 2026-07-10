@@ -20,6 +20,7 @@ import * as path from "path";
 import { detectProjectRoot } from "../projectPaths";
 import { parseReflectionDump, ReflectionDump } from "../intellisense/symbols";
 import { parseSignature } from "../intellisense/signature";
+import { loadIcon } from "../../view/svgAssets";
 
 export const LUA_PALETTE_VIEW_ID = "o3de.luaPalette";
 
@@ -54,7 +55,7 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
   private dump: ReflectionDump | undefined;
   private view: vscode.WebviewView | undefined;
 
-  constructor() {
+  constructor(private readonly extensionUri: vscode.Uri) {
     this.load();
   }
 
@@ -192,8 +193,33 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
     const nonce = getNonce();
     const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
     const initial = JSON.stringify(this.buildModel());
-    return PALETTE_HTML(csp, nonce, initial);
+    const ico = (name: string): string => loadIcon(this.extensionUri, name);
+    // function shares the method glyph; variable shares the property glyph.
+    const method = ico("sym-method");
+    const property = ico("sym-property");
+    const icons: PaletteIcons = {
+      mag: ico("search"),
+      x: ico("close"),
+      chev: ico("chevron"),
+      kinds: {
+        class: ico("sym-class"),
+        ebus: ico("sym-ebus"),
+        method,
+        function: method,
+        property,
+        variable: property,
+        event: ico("sym-event"),
+      },
+    };
+    return PALETTE_HTML(csp, nonce, initial, icons);
   }
+}
+
+interface PaletteIcons {
+  mag: string;
+  x: string;
+  chev: string;
+  kinds: Record<string, string>;
 }
 
 // ---- Insert command --------------------------------------------------------
@@ -239,7 +265,7 @@ function getNonce(): string {
 //  matches (all members visible) or when a member matches (only those visible);
 //  any active filter auto-expands the hits. Clicking a member posts its snippet.
 
-function PALETTE_HTML(csp: string, nonce: string, initial: string): string {
+function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: PaletteIcons): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -309,17 +335,17 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string): string {
 <body>
   <div class="search" id="search">
     <div class="search-wrap">
-      <span class="mag">${MAG_SVG}</span>
+      <span class="mag">${icons.mag}</span>
       <input id="q" type="text" placeholder="Filter classes, methods, EBuses…" spellcheck="false" autocomplete="off" />
-      <button class="clear" id="clear" title="Clear filter">${X_SVG}</button>
+      <button class="clear" id="clear" title="Clear filter">${icons.x}</button>
     </div>
   </div>
   <div class="tree" id="tree"></div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const ICONS = ${JSON.stringify(KIND_ICONS)};
-    const CHEV_SVG = ${JSON.stringify(CHEV_SVG)};
+    const ICONS = ${JSON.stringify(icons.kinds)};
+    const CHEV_SVG = ${JSON.stringify(icons.chev)};
     let model = ${initial};
 
     const treeEl = document.getElementById('tree');
@@ -473,24 +499,3 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string): string {
 </html>`;
 }
 
-// ---- Inline SVGs (webview) -------------------------------------------------
-
-const MAG_SVG =
-  '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">' +
-  '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></svg>';
-const X_SVG =
-  '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
-  '<path d="M4 4l8 8M12 4l-8 8"/></svg>';
-const CHEV_SVG =
-  '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>';
-
-// Per-kind glyphs coloured by the .k-<kind> classes above.
-const KIND_ICONS: Record<string, string> = {
-  class: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>',
-  ebus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="1.8"/><path d="M4.7 4.7a4.7 4.7 0 0 0 0 6.6M11.3 4.7a4.7 4.7 0 0 1 0 6.6"/></svg>',
-  method: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.2 13.5 5.4v5.2L8 13.8 2.5 10.6V5.4L8 2.2zm0 1.6L4 6.1v3.8L8 12.2l4-2.3V6.1L8 3.8z"/></svg>',
-  function: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.2 13.5 5.4v5.2L8 13.8 2.5 10.6V5.4L8 2.2zm0 1.6L4 6.1v3.8L8 12.2l4-2.3V6.1L8 3.8z"/></svg>',
-  property: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="5.5" width="9" height="5" rx="1"/></svg>',
-  variable: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="5.5" width="9" height="5" rx="1"/></svg>',
-  event: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 2 3.5 9H7l-1 5 5.5-7.2H8L9 2z"/></svg>',
-};

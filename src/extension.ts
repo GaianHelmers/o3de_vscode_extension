@@ -322,7 +322,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // (status + Build/Run + Utilities + collapsible Configuration + Onboarding).
   const dashboardView = vscode.window.registerWebviewViewProvider(
     DashboardViewProvider.viewType,
-    new DashboardViewProvider(runState, onboarding, buildOptions, deps, context.workspaceState),
+    new DashboardViewProvider(
+      runState,
+      onboarding,
+      buildOptions,
+      deps,
+      context.workspaceState,
+      context.extensionUri,
+      context.extension.packageJSON.version as string,
+    ),
   );
 
   // Prerequisites are detected in the background so the tree paints markers
@@ -355,7 +363,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Lua function palette — browsable Classes / EBuses / Globals webview with a
   // docked search bar (2nd O3DE view). The search filters live in the webview,
   // so there's no filter command/context key anymore — just a refresh.
-  const luaPalette = new LuaPaletteViewProvider();
+  const luaPalette = new LuaPaletteViewProvider(context.extensionUri);
   const luaPaletteView = vscode.window.registerWebviewViewProvider(LUA_PALETTE_VIEW_ID, luaPalette);
   const luaPaletteRefresh = vscode.commands.registerCommand("o3de.luaPalette.refresh", () => luaPalette.refresh());
 
