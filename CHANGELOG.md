@@ -3,6 +3,47 @@
 All notable changes to the **O3DE Development Tools** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.0] — 2026-07-10
+
+A UX v2 pass that reorganizes the dashboard around how the tools are actually used, plus new
+build/scripting controls and a broader, clearer onboarding.
+
+### Added
+
+- **Core Count** build option — set the parallel job count passed to `cmake --build --parallel N`
+  (blank/0 = auto). Threaded through the interactive, headless, and LLM build paths.
+- **Lua Palette live search** — the palette is now a panel with a docked search bar that filters
+  the Classes / EBuses / Globals tree as you type (instant, per-frame rendering); clicking a symbol
+  still inserts its call snippet.
+- **Version Control** onboarding section — Git, Git LFS, and Perforce, plus new **Subversion** and
+  **Plastic SCM (Unity Version Control)** detectors.
+- **Re-runnable onboarding steps** — already-satisfied checks that can meaningfully be re-run now
+  offer a button to do so: **Source engine** (Re-run) and **Workspace settings** (Rewrite) confirm
+  first; **LLM connections** reports its live status.
+- **Register VS Code as Lua Editor** is now a self-detecting Lua onboarding requirement (reads the
+  `.setreg` it writes) with a **Re-register** action once set.
+- **Add Gems / Folders** — restored as a dashboard action, and its picker gains a **Show built-in
+  gems** toggle so the engine's built-in gems stay out of the way until you want them.
+
+### Changed
+
+- **Dashboard reorganized** — the single "Configuration" area is split into **C++** and **Lua**
+  sections (each: everyday actions first, then configuration), alongside **Setup & Onboarding**.
+  Section collapse state now persists across VS Code restarts.
+- **Onboarding reformatted** — reads top-down as **Status → Required → Common Optionals →
+  C++/Lua switcher → that track's requirements & optionals → Version Control**. Re-scan moved into
+  the section header beside the status light.
+- **Class Creation Wizard** moved into **Utilities** as a discreet full-width button.
+- **Utilities icons** — Editor Log (document), Error Log (error), and Run in Debug (bug) are compact
+  icon buttons; Run in Debug moved out of the Build & Run row.
+- The dashboard view is titled **Dashboard** again (the panel header carries the name + version).
+
+### Removed
+
+- The redundant **Open Lua Palette** and **Write Workspace Settings** buttons from the config
+  sections (the palette is a view; Write Workspace Settings is an onboarding step).
+- The Lua Palette title-bar filter/clear commands — filtering is now the inline search bar.
+
 ## [0.0.15] — 2026-07-09
 
 A follow-up pass resolving reported issues across build, run, Lua tooling, and onboarding.
