@@ -196,6 +196,36 @@ export function detectReflectionDump(): CheckResult {
   return fs.existsSync(dump) ? { state: "ok" } : { state: "absent" };
 }
 
+// Is VS Code registered as O3DE's Lua editor? "O3DE: Register VS Code as Lua Editor"
+// writes vscode_lua_editor.setreg (key /O3DE/Lua/Debugger/Uri = <scheme>://…) into
+// the project's user/ or shared Registry. Match the Uri scheme to THIS app so a
+// stale registration for a different editor still reads as "not registered here".
+export function detectLuaEditorRegistration(): CheckResult {
+  const folder = (vscode.workspace.workspaceFolders ?? []).find((f) => readProject(f.uri.fsPath));
+  if (!folder) {
+    return { state: "unknown" };
+  }
+  const scheme = vscode.env.uriScheme;
+  const candidates: Array<{ file: string; scope: string }> = [
+    { file: path.join(folder.uri.fsPath, "user", "Registry", "vscode_lua_editor.setreg"), scope: "per-user" },
+    { file: path.join(folder.uri.fsPath, "Registry", "vscode_lua_editor.setreg"), scope: "shared" },
+  ];
+  for (const { file, scope } of candidates) {
+    try {
+      if (!fs.existsSync(file)) {
+        continue;
+      }
+      const uri = JSON.parse(fs.readFileSync(file, "utf8"))?.O3DE?.Lua?.Debugger?.Uri;
+      if (typeof uri === "string" && uri.startsWith(`${scheme}://`)) {
+        return { state: "ok", detail: scope };
+      }
+    } catch {
+      // fall through to the next candidate
+    }
+  }
+  return { state: "missing" };
+}
+
 // ---- System & optional -----------------------------------------------------
 
 // Windows long-path support (O3DE hits MAX_PATH without it).
@@ -223,6 +253,17 @@ export async function detectFfmpeg(): Promise<CheckResult> {
 
 export async function detectPerforce(): Promise<CheckResult> {
   const r = await probe("p4", ["-V"], /Rev\.\s*\S+\/([\d.]+)/i);
+  return r.state === "ok" ? r : { state: "absent" };
+}
+
+export async function detectSvn(): Promise<CheckResult> {
+  const r = await probe("svn", ["--version", "--quiet"], /([\d.]+)/);
+  return r.state === "ok" ? r : { state: "absent" };
+}
+
+export async function detectPlastic(): Promise<CheckResult> {
+  // Plastic SCM / Unity Version Control ships the `cm` CLI.
+  const r = await probe("cm", ["version"], /([\d.]+)/);
   return r.state === "ok" ? r : { state: "absent" };
 }
 

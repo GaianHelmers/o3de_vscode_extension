@@ -12,13 +12,16 @@ export interface BuildInputs {
   buildDir: string; // <project>/build/<platform>
   config: string; // profile | debug | release
   targets: string[]; // CMake target names; empty = build everything (no --target)
+  coreCount?: number; // parallel jobs; 0/undefined = auto (omit --parallel)
 }
 
 /**
  * The argv for the O3DE build:
- *   cmake --build <buildDir> --target <T…> --config <config>
+ *   cmake --build <buildDir> --target <T…> --config <config> [--parallel <N>]
  * Mirrors the user's .bat (`--target Editor --config profile`). With no targets,
  * `--target` is omitted so CMake builds the default `all` target (build everything).
+ * `--parallel <N>` is added only when a positive core count is set (else the
+ * generator's own default parallelism applies).
  */
 export function buildBuildArgs(inputs: BuildInputs): string[] {
   const argv = ["cmake", "--build", inputs.buildDir];
@@ -26,6 +29,9 @@ export function buildBuildArgs(inputs: BuildInputs): string[] {
     argv.push("--target", ...inputs.targets);
   }
   argv.push("--config", inputs.config);
+  if (inputs.coreCount && inputs.coreCount > 0) {
+    argv.push("--parallel", String(Math.floor(inputs.coreCount)));
+  }
   return argv;
 }
 
@@ -45,6 +51,11 @@ export function targetsLabel(targets: string[]): string {
     return targets.join(", ");
   }
   return `${targets.slice(0, 2).join(", ")} +${targets.length - 2} more`;
+}
+
+/** How the current core-count selection reads in the panel (0 = auto). */
+export function coreCountLabel(coreCount: number): string {
+  return coreCount > 0 ? `${coreCount} cores` : "Auto (all cores)";
 }
 
 // ---- Free-text parsing -----------------------------------------------------

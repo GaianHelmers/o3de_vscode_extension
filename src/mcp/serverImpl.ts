@@ -217,7 +217,7 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
     async (args: { targets?: string[]; config?: BuildConfig }, extra) => {
       const config = args.config ?? opts.buildOptions.config;
       const targets = args.targets ?? opts.buildOptions.targets;
-      const job = startBuildJob({ generator: opts.buildOptions.generator, config, targets });
+      const job = startBuildJob({ generator: opts.buildOptions.generator, config, targets, coreCount: opts.buildOptions.coreCount });
 
       // Block until done, streaming progress heartbeats if the client gave us a
       // token (keeps the SSE connection alive + resets the client timeout). With a

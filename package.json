@@ -66,7 +66,7 @@
       "o3de": [
         {
           "id": "o3de.dashboard",
-          "name": "O3DE Development Tools",
+          "name": "Dashboard",
           "type": "webview",
           "visibility": "visible",
           "size": 1
@@ -74,7 +74,7 @@
         {
           "id": "o3de.luaPalette",
           "name": "Lua Palette",
-          "type": "tree",
+          "type": "webview",
           "visibility": "collapsed",
           "size": 100
         }
@@ -160,6 +160,10 @@
         "title": "O3DE: Set Launch Options"
       },
       {
+        "command": "o3de.setCoreCount",
+        "title": "O3DE: Set Core Count"
+      },
+      {
         "command": "o3de.generateCppProperties",
         "title": "O3DE: Generate C++ IntelliSense"
       },
@@ -206,16 +210,6 @@
         "command": "o3de.luaPalette.refresh",
         "title": "O3DE: Refresh Lua Palette",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "o3de.luaPalette.filter",
-        "title": "O3DE: Filter Lua Palette",
-        "icon": "$(search)"
-      },
-      {
-        "command": "o3de.luaPalette.clearFilter",
-        "title": "O3DE: Clear Lua Palette Filter",
-        "icon": "$(clear-all)"
       },
       {
         "command": "o3de.llm.enable",
@@ -308,19 +302,9 @@
       ],
       "view/title": [
         {
-          "command": "o3de.luaPalette.filter",
-          "when": "view == o3de.luaPalette",
-          "group": "navigation@1"
-        },
-        {
-          "command": "o3de.luaPalette.clearFilter",
-          "when": "view == o3de.luaPalette && o3de.luaPaletteFiltering",
-          "group": "navigation@2"
-        },
-        {
           "command": "o3de.luaPalette.refresh",
           "when": "view == o3de.luaPalette",
-          "group": "navigation@3"
+          "group": "navigation@1"
         }
       ]
     }

@@ -16,7 +16,7 @@ import * as d from "./detectors";
 
 export type Track = "base" | "cpp" | "lua" | "optional";
 export type Tier = "required" | "recommended" | "optional" | "info";
-export type Category = "toolchain" | "engine" | "cpp" | "lua" | "system";
+export type Category = "toolchain" | "engine" | "cpp" | "lua" | "system" | "vcs";
 
 export interface GuidedAction {
   label: string;
@@ -44,6 +44,11 @@ export interface DependencyCheck {
   // For OPTIONAL checks: which track view(s) they show under (undefined = both).
   // e.g. Clang/CMake-Tools/Python are C++-only — Lua doesn't care about them.
   views?: Array<"cpp" | "lua">;
+  // When set, this check can be re-run even while satisfied (green) — e.g. rewrite
+  // workspace settings after a version bump. The Onboarding row shows a small button
+  // (`label`) in the ok state; clicking confirms (modal `confirm`, if set) then runs
+  // `action` — or the check's normal `action` when `action` is omitted.
+  rerun?: { label: string; confirm?: string; action?: GuidedAction };
 }
 
 // ---- The registry ----------------------------------------------------------
@@ -81,6 +86,10 @@ export const CHECKS: DependencyCheck[] = [
     track: "cpp",
     detect: d.detectSourceEngine,
     action: { label: "Set Up Workspace…", kind: "command", payload: "o3de.setupWorkspace" },
+    rerun: {
+      label: "Re-run",
+      confirm: "A source engine is already set up in this workspace. Run “Set Up Workspace…” again? (Useful after switching or updating the engine.)",
+    },
   },
   {
     id: "workspaceSettings",
@@ -91,6 +100,10 @@ export const CHECKS: DependencyCheck[] = [
     track: "cpp",
     detect: d.detectWorkspaceSettings,
     action: { label: "Write Workspace Settings", kind: "command", payload: "o3de.writeProjectConfig" },
+    rerun: {
+      label: "Rewrite",
+      confirm: "Workspace settings already exist. Rewrite .vscode/settings.json now? (Useful after an extension or engine update changes the wiring.)",
+    },
   },
   {
     id: "visualStudio",
@@ -178,6 +191,19 @@ export const CHECKS: DependencyCheck[] = [
     action: { label: "Install Lua", kind: "extension", payload: "sumneko.lua" },
   },
   {
+    id: "luaEditorRegistration",
+    label: "VS Code as Lua editor",
+    what: "Registers VS Code as O3DE's Lua editor, so the Editor's “Open Lua Editor” and the Script component's Edit button open scripts here instead of LuaIDE. Restart the O3DE Editor after registering.",
+    category: "lua",
+    tier: "recommended",
+    track: "lua",
+    detect: d.detectLuaEditorRegistration,
+    action: { label: "Register VS Code as Lua Editor", kind: "command", payload: "o3de.registerAsLuaEditor" },
+    // Once registered, allow re-registering (e.g. to change scope) — the command's
+    // own scope picker is the confirmation, so no extra modal.
+    rerun: { label: "Re-register" },
+  },
+  {
     id: "remoteToolsGem",
     label: "RemoteTools gem",
     what: "The O3DE gem that lets VS Code connect for Lua debugging and live reflection. Enable it on your project.",
@@ -214,7 +240,7 @@ export const CHECKS: DependencyCheck[] = [
     id: "git",
     label: "Git",
     what: "Version control — needed to clone/update a source O3DE engine or gems.",
-    category: "engine",
+    category: "vcs",
     tier: "recommended",
     track: "optional",
     detect: d.detectGit,
@@ -224,11 +250,31 @@ export const CHECKS: DependencyCheck[] = [
     id: "gitLfs",
     label: "Git LFS",
     what: "Git Large File Storage — O3DE stores big binary assets with it.",
-    category: "engine",
+    category: "vcs",
     tier: "recommended",
     track: "optional",
     detect: d.detectGitLfs,
     action: { label: "Install Git LFS", kind: "winget", payload: "GitHub.GitLFS" },
+  },
+  {
+    id: "svn",
+    label: "Subversion (svn)",
+    what: "Apache Subversion — an alternative version-control client, if your project uses it.",
+    category: "vcs",
+    tier: "optional",
+    track: "optional",
+    detect: d.detectSvn,
+    action: { label: "Install Subversion", kind: "winget", payload: "TortoiseSVN.TortoiseSVN" },
+  },
+  {
+    id: "plastic",
+    label: "Plastic SCM (cm)",
+    what: "Unity Version Control (Plastic SCM) — its `cm` CLI, if your project uses it.",
+    category: "vcs",
+    tier: "optional",
+    track: "optional",
+    detect: d.detectPlastic,
+    docUrl: "https://www.plasticscm.com/download",
   },
   {
     id: "cmakeTools",
@@ -277,7 +323,7 @@ export const CHECKS: DependencyCheck[] = [
     id: "perforce",
     label: "Perforce (p4)",
     what: "Optional — Perforce source-control integration.",
-    category: "system",
+    category: "vcs",
     tier: "optional",
     track: "optional",
     detect: d.detectPerforce,
@@ -296,6 +342,12 @@ export const CHECKS: DependencyCheck[] = [
     track: "optional",
     detect: d.detectLlmConnections,
     action: { label: "Set up LLM connections", kind: "command", payload: "o3de.llm.enable" },
+    // When already connectable, clicking reports status (endpoint/port) rather than
+    // re-enabling — no confirm needed, it's informational.
+    rerun: {
+      label: "Status",
+      action: { label: "Connection Info", kind: "command", payload: "o3de.llm.showConnectionInfo" },
+    },
   },
 ];
 
@@ -415,6 +467,9 @@ export interface CheckView {
   track: Track;
   category: Category;
   actionLabel?: string;
+  // Set only when the check is satisfied (ok) AND re-runnable — the label for the
+  // small "run again" button the Onboarding row shows in that state.
+  rerunLabel?: string;
   isNext: boolean;
 }
 
@@ -424,8 +479,14 @@ export interface OnboardingModel {
   view: View; // which track the sub-interface is showing/editing
   readiness: Readiness; // base + BOTH tracks' status (always shown)
   next?: { id: string; label: string; what: string; actionLabel: string };
-  ramp: CheckView[]; // base + the viewed track, in ramp order
-  optionals: CheckView[]; // optional extras relevant to the viewed track
+  // Shared blocks (above the track switcher):
+  required: CheckView[]; // base REQUIRED checks (project + engine)
+  commonOptionals: CheckView[]; // both-track optionals that aren't version control (LLM, FFmpeg, long paths)
+  // The viewed track's dynamic blocks (below the switcher):
+  ramp: CheckView[]; // the viewed track's own required checks (excludes base)
+  optionals: CheckView[]; // optional extras specific to the viewed track (Clang, CMake Tools, Python)
+  // Its own section (below), independent of track:
+  versionControl: CheckView[]; // Git / Git LFS / Perforce / SVN / Plastic
 }
 
 /**
@@ -441,27 +502,44 @@ export function buildOnboardingModel(
 ): OnboardingModel {
   const intents = new Set<Intent["id"]>([view]);
   const next = nextStep(results, intents, platform);
-  const toView = (c: DependencyCheck): CheckView => ({
-    id: c.id,
-    label: c.label,
-    what: c.what,
-    state: results[c.id]?.state ?? "unknown",
-    detail: results[c.id]?.detail,
-    tier: c.tier,
-    track: c.track,
-    category: c.category,
-    actionLabel: c.action?.label,
-    isNext: next?.id === c.id,
-  });
+  const toView = (c: DependencyCheck): CheckView => {
+    const state = results[c.id]?.state ?? "unknown";
+    return {
+      id: c.id,
+      label: c.label,
+      what: c.what,
+      state,
+      detail: results[c.id]?.detail,
+      tier: c.tier,
+      track: c.track,
+      category: c.category,
+      actionLabel: c.action?.label,
+      rerunLabel: c.rerun && state === "ok" ? c.rerun.label : undefined,
+      isNext: next?.id === c.id,
+    };
+  };
   return {
     view,
     readiness: readiness(results, platform),
     next: next
       ? { id: next.id, label: next.label, what: next.what, actionLabel: next.action?.label ?? "Fix" }
       : undefined,
-    ramp: activeChecks(intents, platform).map(toView),
+    // Required = base checks (project + engine), shared by both tracks → shown
+    // above the switcher. The ramp carries only the viewed track's own checks.
+    required: activeChecks(new Set(), platform).map(toView),
+    ramp: activeChecks(intents, platform)
+      .filter((c) => c.track !== "base")
+      .map(toView),
+    // Optionals split three ways: version control (own section), both-track
+    // "common" optionals, and view-specific track optionals (Clang/CMake/Python).
+    commonOptionals: CHECKS.filter(
+      (c) => c.track === "optional" && appliesToPlatform(c, platform) && !c.views && c.category !== "vcs",
+    ).map(toView),
     optionals: CHECKS.filter(
-      (c) => c.track === "optional" && appliesToPlatform(c, platform) && (!c.views || c.views.includes(view)),
+      (c) => c.track === "optional" && appliesToPlatform(c, platform) && !!c.views && c.views.includes(view),
+    ).map(toView),
+    versionControl: CHECKS.filter(
+      (c) => c.track === "optional" && appliesToPlatform(c, platform) && c.category === "vcs",
     ).map(toView),
   };
 }
@@ -469,4 +547,24 @@ export function buildOnboardingModel(
 /** Look up a check's guided action by id (for the dashboard action dispatch). */
 export function actionFor(id: string): GuidedAction | undefined {
   return CHECKS.find((c) => c.id === id)?.action;
+}
+
+/**
+ * Resolve which action to run for a clicked check given its current state, plus any
+ * confirmation to show first. When the check is satisfied (ok) and declares a `rerun`,
+ * this returns the re-run action (its own `action`, or the normal one) and `confirm`
+ * text; otherwise it returns the normal action with no confirmation.
+ */
+export function resolveGuidedAction(
+  id: string,
+  state: CheckState,
+): { action?: GuidedAction; confirm?: string } {
+  const check = CHECKS.find((c) => c.id === id);
+  if (!check) {
+    return {};
+  }
+  if (check.rerun && state === "ok") {
+    return { action: check.rerun.action ?? check.action, confirm: check.rerun.confirm };
+  }
+  return { action: check.action };
 }

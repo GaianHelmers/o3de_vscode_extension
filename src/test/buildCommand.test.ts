@@ -3,6 +3,7 @@ import {
   buildBuildArgs,
   curatedTargets,
   targetsLabel,
+  coreCountLabel,
   parseCustomTargets,
 } from "../build/buildCommand";
 import { parseTargetNames } from "../intellisense/fileApi";
@@ -30,6 +31,28 @@ suite("buildCommand", () => {
       "--config",
       "profile",
     ]);
+  });
+
+  test("buildBuildArgs appends --parallel N when a positive core count is set", () => {
+    assert.deepStrictEqual(
+      buildBuildArgs({ buildDir, config: "profile", targets: ["Editor"], coreCount: 12 }),
+      ["cmake", "--build", buildDir, "--target", "Editor", "--config", "profile", "--parallel", "12"],
+    );
+  });
+
+  test("buildBuildArgs omits --parallel when core count is 0 (auto)", () => {
+    assert.deepStrictEqual(buildBuildArgs({ buildDir, config: "profile", targets: [], coreCount: 0 }), [
+      "cmake",
+      "--build",
+      buildDir,
+      "--config",
+      "profile",
+    ]);
+  });
+
+  test("coreCountLabel reads Auto at 0 and 'N cores' otherwise", () => {
+    assert.strictEqual(coreCountLabel(0), "Auto (all cores)");
+    assert.strictEqual(coreCountLabel(8), "8 cores");
   });
 
   test("buildBuildArgs builds several targets together under one --target", () => {

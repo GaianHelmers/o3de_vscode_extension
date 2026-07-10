@@ -14,7 +14,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "../log";
-import { discoverProjects, discoverGems, discoverSourceEngines } from "../o3de/discovery";
+import { discoverProjects, discoverGems, discoverSourceEngines, discoverEngines } from "../o3de/discovery";
 import { readProject, O3deProject } from "../o3de/identity";
 import {
   buildWorkspaceFileContent,
@@ -223,46 +223,90 @@ async function addCustomFolders(): Promise<NamedPath[]> {
   return result;
 }
 
+// A gem is "built-in" when it lives inside a registered engine's directory
+// (e.g. <engine>/Gems/…). Those are hidden by default — there are hundreds — and
+// revealed with the "Show built-in gems" toggle.
+function isBuiltInGemPath(gemPath: string, enginePrefixes: string[]): boolean {
+  const resolved = path.resolve(gemPath) + path.sep;
+  return enginePrefixes.some((prefix) => resolved.startsWith(prefix));
+}
+
 async function pickGemsAndFolders(): Promise<NamedPath[]> {
-  const candidates = new Map<string, NamedPath>();
+  const enginePrefixes = discoverEngines().map((e) => path.resolve(e.path) + path.sep);
   // ALL registered gems — project-independent. A gem needn't be enabled on any
   // project to be added to the workspace for reference/navigation.
-  for (const gem of discoverGems()) {
-    if (gem.type === undefined || gem.type === "Code" || gem.type === "Tool") {
-      candidates.set(gem.path, { name: gem.gemName, path: gem.path });
-    }
-  }
+  const allGems = discoverGems()
+    .filter((gem) => gem.type === undefined || gem.type === "Code" || gem.type === "Tool")
+    .map((gem) => ({ name: gem.gemName, path: gem.path, builtIn: isBuiltInGemPath(gem.path, enginePrefixes) }));
 
   interface Item extends vscode.QuickPickItem {
     value?: NamedPath;
     addCustom?: boolean;
+    toggle?: boolean;
   }
-  const items: Item[] = [...candidates.values()].map((gem) => ({
-    label: gem.name,
-    description: gem.path,
-    value: gem,
-  }));
-  items.push({
-    label: "$(add) Add a custom folder…",
-    detail: "Point at any directory (e.g. a gems parent) and name it",
-    addCustom: true,
-  });
 
-  const chosen = await vscode.window.showQuickPick(items, {
-    title: "Add Gems / Folders",
-    placeHolder: "Select gem(s) and/or add a custom folder — Esc to cancel",
-    canPickMany: true,
-  });
-  if (!chosen) {
-    return [];
+  // Loop so the "Show built-in gems" toggle can re-open the picker with a wider
+  // list while preserving the current selections.
+  let showBuiltIn = false;
+  const chosenPaths = new Set<string>();
+  let addCustom = false;
+
+  for (;;) {
+    const visibleGems = allGems.filter((gem) => showBuiltIn || !gem.builtIn);
+    const items: Item[] = [
+      {
+        label: showBuiltIn ? "$(eye-closed) Hide built-in gems" : "$(eye) Show built-in gems",
+        detail: showBuiltIn
+          ? "Currently listing the engine's built-in gems too"
+          : "Also list the engine's built-in gems (there are many)",
+        toggle: true,
+      },
+      ...visibleGems.map<Item>((gem) => ({
+        label: gem.name,
+        description: gem.builtIn ? `${gem.path}  ·  built-in` : gem.path,
+        value: { name: gem.name, path: gem.path },
+        picked: chosenPaths.has(gem.path),
+      })),
+      {
+        label: "$(add) Add a custom folder…",
+        detail: "Point at any directory (e.g. a gems parent) and name it",
+        addCustom: true,
+        picked: addCustom,
+      },
+    ];
+
+    const chosen = await vscode.window.showQuickPick(items, {
+      title: "Add Gems / Folders",
+      placeHolder: "Select gem(s), toggle built-ins, and/or add a custom folder — Esc to cancel",
+      canPickMany: true,
+    });
+    if (!chosen) {
+      return []; // cancelled
+    }
+
+    // Remember the current selections so a toggle re-open doesn't lose them.
+    chosenPaths.clear();
+    for (const item of chosen) {
+      if (item.value) {
+        chosenPaths.add(item.value.path);
+      }
+    }
+    addCustom = chosen.some((item) => item.addCustom);
+
+    if (chosen.some((item) => item.toggle)) {
+      showBuiltIn = !showBuiltIn;
+      continue; // re-open with the new visibility
+    }
+    break; // a normal accept — proceed with the selection
   }
+
   const result: NamedPath[] = [];
-  for (const item of chosen) {
-    if (item.value) {
-      result.push({ name: `Gem: ${item.value.name}`, path: item.value.path });
+  for (const gem of allGems) {
+    if (chosenPaths.has(gem.path)) {
+      result.push({ name: `Gem: ${gem.name}`, path: gem.path });
     }
   }
-  if (chosen.some((item) => item.addCustom)) {
+  if (addCustom) {
     result.push(...(await addCustomFolders()));
   }
   return result;

@@ -63,7 +63,7 @@ export async function buildProject(options: BuildOptions): Promise<void> {
 
   const buildDir = projectBuildDir(project.path);
   const command = formatCommand(
-    buildBuildArgs({ buildDir, config: options.config, targets: options.targets }),
+    buildBuildArgs({ buildDir, config: options.config, targets: options.targets, coreCount: options.coreCount }),
   );
 
   // MSVC environment (equivalent to `call vcvars64.bat`) applied to the terminal.

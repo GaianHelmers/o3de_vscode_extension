@@ -1,9 +1,10 @@
 // ============================================================================
 //  O3DE Development Tools — the single control panel for the O3DE tab.
 //
-//  One webview owns the whole surface (it is the container's only view, so VS
-//  Code hides the per-view header and this reads as one "O3DE Development Tools"
-//  panel). Everything lives here, styled by us:
+//  One webview owns the whole surface. It shows as the "Dashboard" view under
+//  the "O3DE Development Tools <version>" container (the version-carrying title
+//  lives on the container, so the view header just reads "Dashboard").
+//  Everything lives here, styled by us:
 //
 //    BUILD & RUN            header carries the discreet status readout on the
 //    [ Build ] [ Run ]      right (● Ready, or attention pills). Build/Run
@@ -22,10 +23,10 @@ import * as vscode from "vscode";
 import { RunState } from "../build/runState";
 import { OnboardingStatus } from "./onboardingStatus";
 import { BuildOptions } from "../build/buildOptions";
-import { targetsLabel } from "../build/buildCommand";
+import { targetsLabel, coreCountLabel } from "../build/buildCommand";
 import { launchArgsLabel } from "../build/runCommand";
 import { DependencyStatus } from "../deps/dependencyStatus";
-import { buildOnboardingModel, actionFor, View } from "../deps/registry";
+import { buildOnboardingModel, resolveGuidedAction, View } from "../deps/registry";
 import { runGuidedAction } from "../deps/actions";
 
 // ---- Webview → command dispatch table (whitelist) --------------------------
@@ -46,19 +47,17 @@ const COMMANDS: Record<string, string> = {
   selectConfig: "o3de.selectConfig",
   selectCompiler: "o3de.selectCompiler",
   selectTargets: "o3de.selectTargets",
-  writeProjectConfig: "o3de.writeProjectConfig",
+  setCoreCount: "o3de.setCoreCount",
   configureProject: "o3de.configureProject",
   generateCppProperties: "o3de.generateCppProperties",
   classWizard: "o3de.classWizard",
   selectRunTarget: "o3de.selectRunTarget",
   setLaunchArgs: "o3de.setLaunchArgs",
   // Lua
-  registerAsLuaEditor: "o3de.registerAsLuaEditor",
   newLuaScript: "o3de.newLuaScript",
   debugLuaFile: "o3de.debugLuaFile",
   generateLuaIntelliSense: "o3de.generateLuaIntelliSense",
   generateLuaStubsFromDump: "o3de.generateLuaStubsFromDump",
-  openLuaPalette: "o3de.luaPalette.focus",
 };
 
 // ---- Inline icons (self-contained — no asset plumbing / CSP img-src) --------
@@ -75,6 +74,33 @@ const TERMINAL_SVG =
 const LOG_SVG =
   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
   'stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10"/><path d="M3 8h10"/><path d="M3 12h7"/></svg>';
+// Document page (Editor Log).
+const DOC_SVG =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M9 1.5H4.5A1.5 1.5 0 0 0 3 3v10a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 13V5.5z"/>' +
+  '<path d="M9 1.5V5.5H13"/><path d="M5.5 8.5h5"/><path d="M5.5 11h5"/></svg>';
+// Circle with an X — error (Error Log).
+const ERROR_SVG =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/>' +
+  '<path d="M5.8 5.8 10.2 10.2M10.2 5.8 5.8 10.2"/></svg>';
+// Magic wand (Class Creation Wizard).
+const WAND_SVG =
+  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/>' +
+  '<path d="M17.8 11.8 19 13"/><path d="M15 9h.01"/><path d="M17.8 6.2 19 5"/>' +
+  '<path d="m3 21 9-9"/><path d="M12.2 6.2 11 5"/></svg>';
+// Line-art bug — the common Run-and-Debug glyph (matches codicon `bug`/`debug-alt`).
+const BUG_SVG =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+  '<ellipse cx="8" cy="9" rx="3.2" ry="4"/><path d="M8 6v7"/>' +
+  '<path d="M5.2 4.2a2.8 2.8 0 0 1 5.6 0"/>' +
+  '<path d="M6.3 3.4 5 1.8"/><path d="M9.7 3.4 11 1.8"/>' +
+  '<path d="M4.9 7.2 2.4 6"/><path d="M4.8 9.2 2.2 9.4"/><path d="M4.9 11 2.6 12.4"/>' +
+  '<path d="M11.1 7.2 13.6 6"/><path d="M11.2 9.2 13.8 9.4"/><path d="M11.1 11 13.4 12.4"/></svg>';
 
 // ---- Payloads --------------------------------------------------------------
 interface StatusPayload {
@@ -89,49 +115,55 @@ function statusPayload(deps: DependencyStatus): StatusPayload {
   return { base: r.base, cpp: r.cpp, lua: r.lua };
 }
 
+// The two language sections mirror each other: "always-use" first, "sometimes-
+// use" next, and one-and-done setup lives in Onboarding (not here). C++ and Lua
+// each render into their own collapsible section.
 function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
   return {
     // Both gate on "a project is present" — the real precondition (generator/
     // config/runTarget always have defaults, so there's no other unset state).
     canBuild: onboarding.hasProject,
     canRun: onboarding.hasProject,
-    sections: [
+    cpp: [
       {
         title: "Build Options",
         rows: [
           { label: "Generator", value: options.generator, cmd: "selectGenerator" },
           { label: "Compiler", value: options.compiler, cmd: "selectCompiler" },
           { label: "Config", value: options.config, cmd: "selectConfig" },
+          { label: "Core Count", value: coreCountLabel(options.coreCount), cmd: "setCoreCount" },
           { label: "Targets", value: targetsLabel(options.targets), cmd: "selectTargets" },
         ],
       },
       {
-        title: "Project Setup",
-        rows: [
-          { label: "Write Workspace Settings", cmd: "writeProjectConfig" },
-          { label: "Configure Project", cmd: "configureProject" },
-          { label: "Generate C++ IntelliSense", cmd: "generateCppProperties" },
-          { label: "Class Creation Wizard", cmd: "classWizard" },
-        ],
-      },
-      {
-        title: "Launch Settings",
+        title: "Launch Options",
         rows: [
           { label: "Run Target", value: options.runTarget, cmd: "selectRunTarget" },
           { label: "Launch Options", value: launchArgsLabel(options.launchArgs), cmd: "setLaunchArgs" },
         ],
       },
       {
-        // Provisional home for the Lua commands (per user: end of Configuration
-        // until a dedicated Lua UX lands).
-        title: "Lua",
+        title: "Configuration",
         rows: [
-          { label: "Register VS Code as Lua Editor", cmd: "registerAsLuaEditor" },
+          { label: "Configure Project", cmd: "configureProject" },
+          { label: "Generate C++ IntelliSense", cmd: "generateCppProperties" },
+          { label: "Add Gems / Folders", cmd: "addGems" },
+        ],
+      },
+    ],
+    lua: [
+      {
+        title: "Scripts",
+        rows: [
           { label: "New Lua Script", cmd: "newLuaScript" },
           { label: "Debug Lua File", cmd: "debugLuaFile" },
+        ],
+      },
+      {
+        title: "Configuration",
+        rows: [
           { label: "Generate Lua IntelliSense", cmd: "generateLuaIntelliSense" },
           { label: "Generate Stubs From Dump", cmd: "generateLuaStubsFromDump" },
-          { label: "Open Lua Palette", cmd: "openLuaPalette" },
         ],
       },
     ],
@@ -141,6 +173,7 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
 // ---- Provider --------------------------------------------------------------
 export class DashboardViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "o3de.dashboard";
+  private static readonly COLLAPSE_KEY = "o3de.dashboard.collapse";
   private subs: vscode.Disposable[] = [];
 
   constructor(
@@ -148,19 +181,51 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     private readonly onboarding: OnboardingStatus,
     private readonly options: BuildOptions,
     private readonly deps: DependencyStatus,
+    // Section collapse state persists here so it survives full VS Code restarts.
+    private readonly memento: vscode.Memento,
   ) {}
+
+  private getCollapse(): Record<string, boolean> {
+    return this.memento.get<Record<string, boolean>>(DashboardViewProvider.COLLAPSE_KEY) ?? {};
+  }
+
+  // Run a clicked onboarding action. When the check is already satisfied and
+  // declares a re-run, resolveGuidedAction returns its re-run action + (optional)
+  // confirmation, which we surface as a modal before firing.
+  private async runAction(id: string): Promise<void> {
+    const state = this.deps.resultMap[id]?.state ?? "unknown";
+    const { action, confirm } = resolveGuidedAction(id, state);
+    if (!action) {
+      return;
+    }
+    if (confirm) {
+      const choice = await vscode.window.showWarningMessage(confirm, { modal: true }, "Run Again");
+      if (choice !== "Run Again") {
+        return;
+      }
+    }
+    await runGuidedAction(action);
+    await this.deps.refresh();
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     const webview = webviewView.webview;
     webview.options = { enableScripts: true };
     webview.html = this.html(webview);
 
-    webview.onDidReceiveMessage((msg: { command?: string; view?: View; action?: string; rescan?: boolean }) => {
+    webview.onDidReceiveMessage(
+      (msg: { command?: string; view?: View; action?: string; rescan?: boolean; collapse?: { key: string; open: boolean } }) => {
       if (msg.command) {
         const command = COMMANDS[msg.command];
         if (command) {
           void vscode.commands.executeCommand(command);
         }
+        return;
+      }
+      if (msg.collapse) {
+        const map = this.getCollapse();
+        map[msg.collapse.key] = msg.collapse.open;
+        void this.memento.update(DashboardViewProvider.COLLAPSE_KEY, map);
         return;
       }
       if (msg.view) {
@@ -172,10 +237,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (msg.action) {
-        const action = actionFor(msg.action);
-        if (action) {
-          void runGuidedAction(action).then(() => this.deps.refresh());
-        }
+        void this.runAction(msg.action);
       }
     });
 
@@ -225,6 +287,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       status: statusPayload(this.deps),
       config: configPayload(this.options, this.onboarding),
       deps: buildOnboardingModel(this.deps.resultMap, this.deps.view),
+      collapse: this.getCollapse(),
     });
 
     return `<!DOCTYPE html>
@@ -284,6 +347,12 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     button:disabled { opacity: 0.4; cursor: default; }
     button:disabled:hover { background: var(--vscode-button-background); }
     .primary { flex: 1 1 0; font-weight: 600; min-width: 96px; }
+    /* Discreet full-width action — secondary palette, less loud than .primary. */
+    .wide {
+      width: 100%; font-weight: 600;
+      color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
+    }
+    .wide:hover { background: var(--vscode-button-secondaryHoverBackground); }
     .icon {
       flex: 0 0 auto; width: 36px;
       color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
@@ -299,18 +368,25 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .stop:disabled { opacity: 0.4; }
 
     .divider { height: 1px; background: var(--vscode-panel-border); margin: 2px 0; opacity: 0.7; }
+    .divider.wide { margin: 14px 0 8px; }
 
     /* Collapsible sections */
     .sec { display: flex; flex-direction: column; }
     .sec-hdr {
-      justify-content: flex-start; gap: 6px; height: 26px; padding: 0 4px; border-radius: 4px;
-      background: transparent; color: var(--vscode-descriptionForeground);
-      font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+      justify-content: flex-start; gap: 6px; height: 28px; padding: 0 4px; border-radius: 4px;
+      background: transparent; color: var(--vscode-foreground);
+      font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
     }
     .sec-hdr:hover { background: var(--vscode-list-hoverBackground); }
     .chev { font-size: 10px; transition: transform 120ms ease; opacity: 0.8; }
     .sec.open > .sec-hdr .chev { transform: rotate(90deg); }
-    .sec-status { margin-left: auto; }
+    .hdr-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+    .hdr-rescan {
+      display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+      border-radius: 4px; cursor: pointer; font-size: 13px; opacity: 0.75;
+      color: var(--vscode-descriptionForeground);
+    }
+    .hdr-rescan:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
     .sec-body { display: none; padding: 2px 0 2px; flex-direction: column; gap: 6px; }
     .sec.open > .sec-body { display: flex; }
 
@@ -342,9 +418,6 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .intent.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border-color: transparent; }
     .intent:hover { background: var(--vscode-list-hoverBackground); }
     .intent.on:hover { background: var(--vscode-button-hoverBackground); }
-    .markerrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 8px; }
-    .viewmarker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--vscode-descriptionForeground); opacity: 0.7; }
 
     .reports { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 8px; }
     .rep { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 8px; border-radius: 11px;
@@ -393,29 +466,35 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       <div class="row">
         <button id="build" class="primary" title="Build the selected target(s) with the current config">${TOOLS_SVG}<span>Build</span></button>
         <button id="run" class="primary" title="Launch the selected run target"><span>▶ Run</span></button>
-        <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">🐞</button>
       </div>
     </div>
 
     <div class="group">
       <div class="label">Utilities</div>
+      <button id="classWizard" class="wide" title="Scaffold a new O3DE component/EBus class (Reflect boilerplate, m_ prefixes)">${WAND_SVG}<span>Class Creation Wizard</span></button>
       <div class="row">
         <button id="log" class="icon" title="Reveal the O3DE Development Tools output channel">${LOG_SVG}</button>
         <button id="terminal" class="icon" title="Open a terminal with the MSVC environment established">${TERMINAL_SVG}</button>
-        <button id="editorLog" class="util-link" title="Open the O3DE Editor.log for this project">Editor Log</button>
-        <button id="errorLog" class="util-link" title="Open the O3DE Error.log for this project">Error Log</button>
+        <button id="editorLog" class="icon" title="Open the O3DE Editor.log for this project">${DOC_SVG}</button>
+        <button id="errorLog" class="icon" title="Open the O3DE Error.log for this project">${ERROR_SVG}</button>
+        <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">${BUG_SVG}</button>
       </div>
     </div>
 
     <div class="divider"></div>
 
-    <div class="sec" id="sec-config">
-      <button class="sec-hdr" data-key="config"><span class="chev">▶</span><span>Configuration</span></button>
-      <div class="sec-body"><div id="config"></div></div>
+    <div class="sec" id="sec-cpp">
+      <button class="sec-hdr" data-key="cpp"><span class="chev">▶</span><span>C++</span></button>
+      <div class="sec-body"><div id="cpp"></div></div>
     </div>
 
-    <div class="sec open" id="sec-setup">
-      <button class="sec-hdr" data-key="setup"><span class="chev">▶</span><span>Setup &amp; Onboarding</span><span class="sec-status" id="setup-status"></span></button>
+    <div class="sec" id="sec-lua">
+      <button class="sec-hdr" data-key="lua"><span class="chev">▶</span><span>Lua</span></button>
+      <div class="sec-body"><div id="lua"></div></div>
+    </div>
+
+    <div class="sec" id="sec-setup">
+      <button class="sec-hdr" data-key="setup"><span class="chev">▶</span><span>Setup &amp; Onboarding</span><span class="hdr-actions"><span class="hdr-rescan" id="setup-rescan" title="Re-scan dependencies (e.g. after enabling a gem or generating a dump)">↻</span><span class="sec-status" id="setup-status"></span></span></button>
       <div class="sec-body"><div id="deps"></div></div>
     </div>
   </div>
@@ -426,7 +505,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     const runBtn = document.getElementById('run');
     const buildBtn = document.getElementById('build');
     const statusEl = document.getElementById('status');
-    const cfgEl = document.getElementById('config');
+    const cppEl = document.getElementById('cpp');
+    const luaEl = document.getElementById('lua');
     const depsEl = document.getElementById('deps');
     const setupStatus = document.getElementById('setup-status');
     let running = false, canBuild = false, canRun = false;
@@ -436,25 +516,32 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     function sendAction(id) { vscode.postMessage({ action: id }); }
     function sendRescan() { vscode.postMessage({ rescan: true }); }
 
-    // ---- Collapsible sections (state persisted) ----
+    // ---- Collapsible sections ----
+    // State is persisted in the extension's workspaceState (survives full VS Code
+    // restarts, unlike webview getState which can drop when the view is disposed).
+    // Defaults: C++ open, Lua + Onboarding closed.
+    const DEFAULT_COLLAPSE = { cpp: true, lua: false, setup: false };
+    const collapse = Object.assign({}, DEFAULT_COLLAPSE, INITIAL.collapse || {});
+    function persistCollapse(key, open) {
+      collapse[key] = open;
+      vscode.postMessage({ collapse: { key, open } });
+    }
     function initCollapse() {
-      const saved = vscode.getState() || { config: true, setup: true };
       document.querySelectorAll('.sec-hdr').forEach((h) => {
         const key = h.dataset.key;
         const sec = h.parentElement;
-        if (saved[key]) { sec.classList.add('open'); }
+        sec.classList.toggle('open', !!collapse[key]);
         h.onclick = () => {
-          sec.classList.toggle('open');
-          const st = vscode.getState() || {};
-          st[key] = sec.classList.contains('open');
-          vscode.setState(st);
+          const open = !sec.classList.contains('open');
+          sec.classList.toggle('open', open);
+          persistCollapse(key, open);
         };
       });
     }
     function expandSetup() {
       const sec = document.getElementById('sec-setup');
       sec.classList.add('open');
-      const st = vscode.getState() || {}; st.setup = true; vscode.setState(st);
+      persistCollapse('setup', true);
       sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
@@ -512,15 +599,19 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       return row;
     }
 
-    function setConfig(cfg) {
-      canBuild = cfg.canBuild; canRun = cfg.canRun; applyEnable();
-      cfgEl.replaceChildren();
-      for (const section of cfg.sections) {
-        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = section.title; cfgEl.appendChild(h);
+    function renderSections(container, sections) {
+      container.replaceChildren();
+      for (const section of sections) {
+        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = section.title; container.appendChild(h);
         const rows = document.createElement('div'); rows.className = 'rows';
         for (const r of section.rows) { rows.appendChild(valueRow(r, false)); }
-        cfgEl.appendChild(rows);
+        container.appendChild(rows);
       }
+    }
+    function setConfig(cfg) {
+      canBuild = cfg.canBuild; canRun = cfg.canRun; applyEnable();
+      renderSections(cppEl, cfg.cpp);
+      renderSections(luaEl, cfg.lua);
     }
 
     // ---- Guided setup (intent ramp + acquisition) ----
@@ -530,8 +621,15 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       row.title = v.what + (v.detail ? '\\n\\n' + v.detail : '');
       const dot = document.createElement('span'); dot.className = 'dot s-' + v.state; row.appendChild(dot);
       const label = document.createElement('span'); label.className = 'dlabel'; label.textContent = v.label; row.appendChild(label);
-      if (v.detail && v.state === 'ok') {
-        const d = document.createElement('span'); d.className = 'ddetail'; d.textContent = v.detail; row.appendChild(d);
+      if (v.state === 'ok') {
+        // Satisfied: show the detail, plus a small re-run button for checks that
+        // support re-firing while green (e.g. rewrite workspace settings).
+        if (v.detail) { const d = document.createElement('span'); d.className = 'ddetail'; d.textContent = v.detail; row.appendChild(d); }
+        if (v.rerunLabel) {
+          const b = document.createElement('button'); b.className = 'fixbtn small'; b.textContent = v.rerunLabel;
+          b.title = 'Run this step again';
+          b.onclick = () => sendAction(v.id); row.appendChild(b);
+        }
       } else if (v.actionLabel && (v.state === 'missing' || v.state === 'warn' || v.state === 'absent' || v.state === 'unknown')) {
         const b = document.createElement('button'); b.className = 'fixbtn small'; b.textContent = v.actionLabel;
         b.onclick = () => sendAction(v.id); row.appendChild(b);
@@ -539,34 +637,20 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       return row;
     }
 
+    // Render a subhead + a block of dep-rows (skips entirely when empty).
+    function depBlock(title, rows) {
+      if (!rows || !rows.length) { return; }
+      const h = document.createElement('div'); h.className = 'subhead'; h.textContent = title; depsEl.appendChild(h);
+      const box = document.createElement('div'); box.className = 'rows';
+      for (const v of rows) { box.appendChild(depRow(v)); }
+      depsEl.appendChild(box);
+    }
+
     function setDeps(model) {
       depsEl.replaceChildren();
 
-      // Track switcher (radio) — view/edit C++ OR Lua setup. The panel below
-      // shows only the selected track; the badges show both tracks' status.
-      const seg = document.createElement('div'); seg.className = 'intents';
-      const mk = (key, text) => {
-        const el = document.createElement('button');
-        el.className = 'intent' + (model.view === key ? ' on' : '');
-        el.textContent = text;
-        el.onclick = () => sendView(key);
-        return el;
-      };
-      seg.appendChild(mk('cpp', 'C++ setup'));
-      seg.appendChild(mk('lua', 'Lua setup'));
-      depsEl.appendChild(seg);
-
-      const markerRow = document.createElement('div'); markerRow.className = 'markerrow';
-      const marker = document.createElement('span'); marker.className = 'viewmarker';
-      marker.textContent = 'Showing ' + (model.view === 'cpp' ? 'C++' : 'Lua') + ' tools';
-      markerRow.appendChild(marker);
-      const rescan = document.createElement('button'); rescan.className = 'fixbtn small'; rescan.textContent = '↻ Re-scan';
-      rescan.title = 'Re-detect dependencies (e.g. after enabling a gem or generating a dump)';
-      rescan.onclick = sendRescan;
-      markerRow.appendChild(rescan);
-      depsEl.appendChild(markerRow);
-
-      // Sub-reports (always both tracks): base / C++ / Lua ready + optionals count.
+      // STATUS — the read-out first: base / C++ / Lua ready + optionals count.
+      // (The overall status dot + Re-scan live in the section header.)
       const reports = document.createElement('div'); reports.className = 'reports';
       const rep = (ok, text) => {
         const s = document.createElement('span'); s.className = 'rep ' + (ok ? 'ok' : 'no');
@@ -581,11 +665,12 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       const optRep = document.createElement('span'); optRep.className = 'rep';
       optRep.textContent = 'Optionals ' + opt.present + '/' + opt.total; reports.appendChild(optRep);
       depsEl.appendChild(reports);
+
       setupStatus.replaceChildren();
       const sdot = document.createElement('span'); sdot.className = 'dot';
       sdot.style.background = model.next ? 'var(--bad)' : 'var(--ok)'; setupStatus.appendChild(sdot);
 
-      // Next step — the single guided action to take now.
+      // NEXT — the single guided action to take now (may be a common or track step).
       if (model.next) {
         const card = document.createElement('div'); card.className = 'next';
         const l = document.createElement('div'); l.className = 'nlabel'; l.textContent = 'Next: ' + model.next.label; card.appendChild(l);
@@ -595,18 +680,42 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         depsEl.appendChild(card);
       }
 
-      // The ramp (necessities for the chosen intents).
-      const h1 = document.createElement('div'); h1.className = 'subhead'; h1.textContent = 'Required'; depsEl.appendChild(h1);
-      const ramp = document.createElement('div'); ramp.className = 'rows';
-      for (const v of model.ramp) { ramp.appendChild(depRow(v)); }
-      depsEl.appendChild(ramp);
+      // COMMON — required base checks + both-track optionals (not track-specific).
+      depBlock('Required', model.required);
+      depBlock('Common Optionals', model.commonOptionals);
 
-      // Optional extras.
-      if (model.optionals.length) {
-        const h2 = document.createElement('div'); h2.className = 'subhead'; h2.textContent = 'Optional'; depsEl.appendChild(h2);
-        const optRows = document.createElement('div'); optRows.className = 'rows';
-        for (const v of model.optionals) { optRows.appendChild(depRow(v)); }
-        depsEl.appendChild(optRows);
+      // Spacer between the shared requirements and the track switcher.
+      const div1 = document.createElement('div'); div1.className = 'divider wide'; depsEl.appendChild(div1);
+
+      // TRACK SWITCHER — the "window changers": pick C++ or Lua; the rows below
+      // carry only that track's own dependencies + configuration.
+      const seg = document.createElement('div'); seg.className = 'intents';
+      const mk = (key, text) => {
+        const el = document.createElement('button');
+        el.className = 'intent' + (model.view === key ? ' on' : '');
+        el.textContent = text;
+        el.onclick = () => sendView(key);
+        return el;
+      };
+      seg.appendChild(mk('cpp', 'C++ setup'));
+      seg.appendChild(mk('lua', 'Lua setup'));
+      depsEl.appendChild(seg);
+
+      // TRACK — the selected track's dynamic requirements + optionals.
+      const trackName = model.view === 'cpp' ? 'C++' : 'Lua';
+      if (model.ramp.length) {
+        depBlock(trackName + ' Requirements', model.ramp);
+      } else {
+        const h = document.createElement('div'); h.className = 'subhead'; h.textContent = trackName + ' Requirements'; depsEl.appendChild(h);
+        const none = document.createElement('div'); none.className = 'dep-row'; none.style.opacity = '0.6';
+        none.textContent = 'Nothing beyond the common requirements.'; depsEl.appendChild(none);
+      }
+      depBlock(trackName + ' Optionals', model.optionals);
+
+      // VERSION CONTROL — its own section, independent of track.
+      if (model.versionControl.length) {
+        const div2 = document.createElement('div'); div2.className = 'divider wide'; depsEl.appendChild(div2);
+        depBlock('Version Control', model.versionControl);
       }
     }
 
@@ -618,6 +727,10 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     document.getElementById('log').onclick = () => send('log');
     document.getElementById('editorLog').onclick = () => send('editorLog');
     document.getElementById('errorLog').onclick = () => send('errorLog');
+    document.getElementById('classWizard').onclick = () => send('classWizard');
+    // Re-scan sits inside the Onboarding header button — stop the click from also
+    // toggling the section's collapse.
+    document.getElementById('setup-rescan').onclick = (e) => { e.stopPropagation(); sendRescan(); };
 
     window.addEventListener('message', (e) => {
       const m = e.data;

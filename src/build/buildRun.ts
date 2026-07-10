@@ -40,6 +40,7 @@ export interface HeadlessBuildParams {
   generator: string; // must match the configured tree's generator
   config: string; // profile | debug | release
   targets: string[]; // empty = build everything
+  coreCount?: number; // parallel jobs; 0/undefined = auto
 }
 
 let building = false; // in-flight lock — one headless build at a time
@@ -103,7 +104,7 @@ export async function runBuildHeadless(params: HeadlessBuildParams): Promise<Bui
   }
 
   const buildDir = projectBuildDir(project.path);
-  const command = formatCommand(buildBuildArgs({ buildDir, config: params.config, targets }));
+  const command = formatCommand(buildBuildArgs({ buildDir, config: params.config, targets, coreCount: params.coreCount }));
 
   let env: Record<string, string>;
   try {

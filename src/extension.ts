@@ -31,7 +31,7 @@ import { registerLuaDebug, debugLuaFile } from "./lua/debug/debugAdapter";
 import { registerLuaHandoff } from "./lua/handoff";
 import { generateLuaIntelliSense, generateLuaStubsFromDump } from "./lua/intellisense/intelliSense";
 import { launchClassWizard } from "./tools/classWizard";
-import { LuaPaletteProvider, LUA_PALETTE_VIEW_ID, insertLuaSymbol } from "./lua/palette/luaPaletteProvider";
+import { LuaPaletteViewProvider, LUA_PALETTE_VIEW_ID } from "./lua/palette/luaPaletteProvider";
 import { DependencyStatus } from "./deps/dependencyStatus";
 import { O3deMcpServer } from "./mcp/server";
 import {
@@ -287,6 +287,26 @@ export function activate(context: vscode.ExtensionContext): void {
       await buildOptions.setLaunchArgs(value.trim());
     }
   });
+  const setCoreCount = vscode.commands.registerCommand("o3de.setCoreCount", async () => {
+    const value = await vscode.window.showInputBox({
+      title: "O3DE: Core Count",
+      prompt: "Parallel build jobs (cmake --build --parallel N). Blank or 0 = auto (all cores).",
+      placeHolder: "e.g. 12",
+      value: buildOptions.coreCount > 0 ? String(buildOptions.coreCount) : "",
+      validateInput: (text) => {
+        const t = text.trim();
+        if (t === "") {
+          return undefined; // blank clears back to auto
+        }
+        const n = Number(t);
+        return Number.isInteger(n) && n >= 0 ? undefined : "Enter a whole number (0 = auto).";
+      },
+    });
+    if (value !== undefined) {
+      const t = value.trim();
+      await buildOptions.setCoreCount(t === "" ? 0 : Number(t));
+    }
+  });
 
   // Status-bar button — persistent, clickable proof the extension is alive.
   const statusItem = vscode.window.createStatusBarItem(
@@ -302,7 +322,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // (status + Build/Run + Utilities + collapsible Configuration + Onboarding).
   const dashboardView = vscode.window.registerWebviewViewProvider(
     DashboardViewProvider.viewType,
-    new DashboardViewProvider(runState, onboarding, buildOptions, deps),
+    new DashboardViewProvider(runState, onboarding, buildOptions, deps, context.workspaceState),
   );
 
   // Prerequisites are detected in the background so the tree paints markers
@@ -332,30 +352,12 @@ export function activate(context: vscode.ExtensionContext): void {
     void debugLuaFile(uri);
   });
 
-  // Lua function palette — browsable Classes / EBuses / Globals tree (2nd O3DE view).
-  const luaPalette = new LuaPaletteProvider();
-  const luaPaletteView = vscode.window.registerTreeDataProvider(LUA_PALETTE_VIEW_ID, luaPalette);
+  // Lua function palette — browsable Classes / EBuses / Globals webview with a
+  // docked search bar (2nd O3DE view). The search filters live in the webview,
+  // so there's no filter command/context key anymore — just a refresh.
+  const luaPalette = new LuaPaletteViewProvider();
+  const luaPaletteView = vscode.window.registerWebviewViewProvider(LUA_PALETTE_VIEW_ID, luaPalette);
   const luaPaletteRefresh = vscode.commands.registerCommand("o3de.luaPalette.refresh", () => luaPalette.refresh());
-  const luaPaletteInsert = vscode.commands.registerCommand("o3de.luaPalette.insert", (text: string) =>
-    insertLuaSymbol(text),
-  );
-  const applyPaletteFilter = (text: string): void => {
-    luaPalette.setFilter(text);
-    void vscode.commands.executeCommand("setContext", "o3de.luaPaletteFiltering", luaPalette.isFiltering);
-  };
-  const luaPaletteFilter = vscode.commands.registerCommand("o3de.luaPalette.filter", async () => {
-    const text = await vscode.window.showInputBox({
-      prompt: "Filter the Lua palette (class / method / EBus / global name)",
-      placeHolder: "e.g. TransformBus, Vector3, GetWorld…",
-      value: "",
-    });
-    if (text !== undefined) {
-      applyPaletteFilter(text);
-    }
-  });
-  const luaPaletteClearFilter = vscode.commands.registerCommand("o3de.luaPalette.clearFilter", () =>
-    applyPaletteFilter(""),
-  );
 
   // Lua IntelliSense: dump the reflected API (headless Editor) → LuaLS stubs.
   // Refresh the palette afterwards so it populates from the fresh dump.
@@ -402,6 +404,7 @@ export function activate(context: vscode.ExtensionContext): void {
     selectTargetsCmd,
     selectRunTarget,
     setLaunchArgs,
+    setCoreCount,
     showEditorLog,
     showErrorLog,
     debugLua,
@@ -409,9 +412,6 @@ export function activate(context: vscode.ExtensionContext): void {
     genLuaStubsFromDump,
     luaPaletteView,
     luaPaletteRefresh,
-    luaPaletteInsert,
-    luaPaletteFilter,
-    luaPaletteClearFilter,
     dashboardView,
     statusItem,
   );

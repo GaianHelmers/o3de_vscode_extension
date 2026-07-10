@@ -22,6 +22,7 @@ const KEY_GENERATOR = "o3de.build.generator";
 const KEY_COMPILER = "o3de.build.compiler";
 const KEY_CONFIG = "o3de.build.config";
 const KEY_TARGETS = "o3de.build.targets";
+const KEY_CORE_COUNT = "o3de.build.coreCount";
 const KEY_RUN_TARGET = "o3de.run.target";
 const KEY_LAUNCH_ARGS = "o3de.run.launchArgs";
 
@@ -51,6 +52,15 @@ export class BuildOptions {
     return Array.isArray(stored) ? stored : [];
   }
 
+  /**
+   * Parallel build jobs passed to `cmake --build --parallel N`.
+   * 0 = auto: omit the flag and let the generator decide (Ninja already uses all cores).
+   */
+  get coreCount(): number {
+    const stored = this.state.get<number>(KEY_CORE_COUNT);
+    return typeof stored === "number" && stored > 0 ? Math.floor(stored) : 0;
+  }
+
   /** What the Run command launches (Editor or the project's GameLauncher). */
   get runTarget(): RunTarget {
     return this.state.get<RunTarget>(KEY_RUN_TARGET) ?? "Editor";
@@ -78,6 +88,13 @@ export class BuildOptions {
 
   async setTargets(value: string[]): Promise<void> {
     await this.state.update(KEY_TARGETS, value);
+    this.changed.fire();
+  }
+
+  /** Set the parallel job count (0 or negative = auto/omit the flag). */
+  async setCoreCount(value: number): Promise<void> {
+    const normalized = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+    await this.state.update(KEY_CORE_COUNT, normalized);
     this.changed.fire();
   }
 

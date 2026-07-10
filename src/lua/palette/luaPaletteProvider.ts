@@ -1,13 +1,17 @@
 // ============================================================================
-//  Lua Function Palette — a browsable tree of the reflected O3DE API.
+//  Lua Function Palette — a browsable, live-filtered view of the reflected API.
 //
 //  The VS Code equivalent of the built-in Lua IDE's "Class Reference" panel:
-//  a searchable Classes / EBuses / Globals tree, fed by the same reflection dump
-//  that drives IntelliSense (user/lua_symbols.json). Clicking a symbol inserts a
-//  call snippet into the active Lua editor.
+//  a Classes / EBuses / Globals tree fed by the same reflection dump that drives
+//  IntelliSense (user/lua_symbols.json). A search bar docked at the top of the
+//  section filters the tree live as you type; clicking a symbol inserts a call
+//  snippet into the active Lua editor.
 //
-//  Lives as a second view under the O3DE activity-bar container, alongside the
-//  Dashboard. Refreshes after a dump is generated; can be revealed on handoff.
+//  Implemented as a webview (a native TreeView can't host a persistent search
+//  input above its rows). The extension side loads the dump and hands the whole
+//  model to the webview; filtering + expand/collapse happen client-side so typing
+//  stays instant. Lives as the second view under the O3DE container, alongside
+//  the Dashboard; refreshes after a dump is generated.
 // ============================================================================
 
 import * as vscode from "vscode";
@@ -17,57 +21,79 @@ import { detectProjectRoot } from "../projectPaths";
 import { parseReflectionDump, ReflectionDump } from "../intellisense/symbols";
 import { parseSignature } from "../intellisense/signature";
 
-// ---- Tree node model -------------------------------------------------------
-
-type Node =
-  | { kind: "message"; label: string; command?: vscode.Command }
-  | { kind: "category"; label: string; category: "classes" | "ebuses" | "globals" }
-  | { kind: "class"; name: string }
-  | { kind: "ebus"; name: string }
-  | { kind: "member"; label: string; detail: string; tooltip: string; insert: string; icon: string };
-
 export const LUA_PALETTE_VIEW_ID = "o3de.luaPalette";
 
-export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
-  private readonly changed = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this.changed.event;
+// ---- Model handed to the webview -------------------------------------------
 
+type MemberKind = "method" | "property" | "event" | "function" | "variable";
+
+interface PaletteMember {
+  label: string;
+  detail: string; // signature / "read-only" / table name — the dim right-hand text
+  tooltip: string;
+  insert: string; // snippet inserted on click ($0 = cursor)
+  kind: MemberKind;
+}
+
+interface PaletteContainer {
+  name: string;
+  kind: "class" | "ebus";
+  members: PaletteMember[];
+}
+
+interface PaletteModel {
+  hasDump: boolean;
+  classes: PaletteContainer[];
+  ebuses: PaletteContainer[];
+  globals: PaletteMember[];
+}
+
+// ---- Provider --------------------------------------------------------------
+
+export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
   private dump: ReflectionDump | undefined;
-  private dumpPath: string | undefined;
+  private view: vscode.WebviewView | undefined;
 
   constructor() {
     this.load();
   }
 
-  private filter = "";
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
+    const webview = webviewView.webview;
+    webview.options = { enableScripts: true };
+    webview.html = this.html();
 
+    webview.onDidReceiveMessage((msg: { type?: string; text?: string }) => {
+      if (msg.type === "insert" && typeof msg.text === "string") {
+        void insertLuaSymbol(msg.text);
+      } else if (msg.type === "generate") {
+        void vscode.commands.executeCommand("o3de.generateLuaIntelliSense");
+      }
+    });
+
+    // Re-detect whenever the view is revealed — a dump may have been generated
+    // externally (via the live Editor) since it was last shown.
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.refresh();
+      }
+    });
+    this.post();
+  }
+
+  /** Reload the dump from disk and re-render the webview. */
   refresh(): void {
     this.load();
-    this.changed.fire();
+    this.post();
   }
 
-  /** Filter the tree to entries whose name matches (case-insensitive). Empty clears it. */
-  setFilter(text: string): void {
-    this.filter = text.trim().toLowerCase();
-    this.changed.fire();
+  private post(): void {
+    void this.view?.webview.postMessage({ type: "model", model: this.buildModel() });
   }
 
-  get isFiltering(): boolean {
-    return this.filter !== "";
-  }
+  // ---- Dump loading --------------------------------------------------------
 
-  private matches(name: string): boolean {
-    return this.filter === "" || name.toLowerCase().includes(this.filter);
-  }
-
-  // When a filter is active, auto-expand containers so matches are visible without clicking.
-  private collapseState(): vscode.TreeItemCollapsibleState {
-    return this.isFiltering
-      ? vscode.TreeItemCollapsibleState.Expanded
-      : vscode.TreeItemCollapsibleState.Collapsed;
-  }
-
-  // Load user/lua_symbols.json from the detected project, if present.
   private load(): void {
     this.dump = undefined;
     const projectRoot = detectProjectRoot();
@@ -75,7 +101,6 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
       return;
     }
     const dumpPath = path.join(projectRoot, "user", "lua_symbols.json");
-    this.dumpPath = dumpPath;
     if (!fs.existsSync(dumpPath)) {
       return;
     }
@@ -86,194 +111,88 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
     }
   }
 
-  getTreeItem(node: Node): vscode.TreeItem {
-    switch (node.kind) {
-      case "message": {
-        const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
-        item.command = node.command;
-        item.iconPath = new vscode.ThemeIcon("info");
-        return item;
-      }
-      case "category": {
-        const item = new vscode.TreeItem(node.label, this.collapseState());
-        item.iconPath = new vscode.ThemeIcon("symbol-namespace");
-        item.contextValue = "o3deLuaCategory";
-        return item;
-      }
-      case "class": {
-        const item = new vscode.TreeItem(node.name, this.collapseState());
-        item.iconPath = new vscode.ThemeIcon("symbol-class");
-        return item;
-      }
-      case "ebus": {
-        const item = new vscode.TreeItem(node.name, this.collapseState());
-        item.iconPath = new vscode.ThemeIcon("symbol-event");
-        return item;
-      }
-      case "member": {
-        const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
-        item.description = node.detail;
-        item.tooltip = new vscode.MarkdownString(node.tooltip);
-        item.iconPath = new vscode.ThemeIcon(node.icon);
-        item.command = {
-          command: "o3de.luaPalette.insert",
-          title: "Insert",
-          arguments: [node.insert],
-        };
-        return item;
-      }
-    }
-  }
+  // ---- Model builder (no filtering — the webview filters live) -------------
 
-  getChildren(node?: Node): Node[] {
-    if (!node) {
-      return this.roots();
-    }
-    if (node.kind === "category") {
-      return node.category === "classes"
-        ? this.classNodes()
-        : node.category === "ebuses"
-          ? this.ebusNodes()
-          : this.globalNodes();
-    }
-    if (node.kind === "class") {
-      return this.classMembers(node.name);
-    }
-    if (node.kind === "ebus") {
-      return this.ebusMembers(node.name);
-    }
-    return [];
-  }
-
-  // ---- Level builders ------------------------------------------------------
-
-  private roots(): Node[] {
+  private buildModel(): PaletteModel {
     if (!this.dump) {
-      return [
-        {
-          kind: "message",
-          label: "No reflected API yet — click to generate",
-          command: { command: "o3de.generateLuaIntelliSense", title: "Generate Lua IntelliSense" },
-        },
-      ];
+      return { hasDump: false, classes: [], ebuses: [], globals: [] };
     }
-    // Counts reflect the active filter; when filtering, hide categories with no hits.
-    const classCount = this.classNodes().length;
-    const ebusCount = this.ebusNodes().length;
-    const globalCount = this.globalNodes().length;
-
-    const cats: Node[] = [
-      { kind: "category", label: `Classes (${classCount})`, category: "classes" },
-      { kind: "category", label: `EBuses (${ebusCount})`, category: "ebuses" },
-      { kind: "category", label: `Globals (${globalCount})`, category: "globals" },
-    ];
-    if (!this.isFiltering) {
-      return cats;
-    }
-    const counts = [classCount, ebusCount, globalCount];
-    const shown = cats.filter((_, i) => counts[i] > 0);
-    if (shown.length === 0) {
-      return [
-        {
-          kind: "message",
-          label: `No API symbols match "${this.filter}"`,
-          command: { command: "o3de.luaPalette.clearFilter", title: "Clear Filter" },
-        },
-      ];
-    }
-    return shown;
+    return {
+      hasDump: true,
+      classes: this.classContainers(),
+      ebuses: this.ebusContainers(),
+      globals: this.globalMembers(),
+    };
   }
 
-  private classNodes(): Node[] {
-    const classes = (this.dump?.classes ?? []).filter(
-      (c) => this.matches(c.name) || c.methods.some((m) => this.matches(m.name)) || c.properties.some((p) => this.matches(p.name)),
-    );
-    return sortByName(classes).map((c) => ({ kind: "class", name: c.name }));
-  }
-
-  private ebusNodes(): Node[] {
-    const buses = (this.dump?.ebuses ?? []).filter(
-      (b) => this.matches(b.name) || b.senders.some((s) => this.matches(s.name)),
-    );
-    return sortByName(buses).map((b) => ({ kind: "ebus", name: b.name }));
-  }
-
-  private classMembers(className: string): Node[] {
-    const cls = this.dump?.classes.find((c) => c.name === className);
-    if (!cls) {
-      return [];
-    }
-    // If the class itself matched, show all members; otherwise only matching ones.
-    const keep = (name: string): boolean => this.matches(className) || this.matches(name);
-    const methods = sortByName(cls.methods.filter((m) => keep(m.name))).map<Node>((m) => {
-      const sig = signatureText(m.debugArgumentInfo);
-      return {
-        kind: "member",
-        label: m.name,
-        detail: sig,
-        tooltip: `**${className}:${m.name}**${sig}\n\n_method_`,
-        insert: `${m.name}($0)`,
-        icon: "symbol-method",
-      };
-    });
-    const properties = sortByName(cls.properties.filter((p) => keep(p.name))).map<Node>((p) => ({
-      kind: "member",
-      label: p.name,
-      detail: p.canWrite ? "" : "read-only",
-      tooltip: `**${className}.${p.name}**\n\n_property (${p.canRead ? "R" : "-"}${p.canWrite ? "W" : "-"})_`,
-      insert: p.name,
-      icon: "symbol-field",
-    }));
-    return [...methods, ...properties];
-  }
-
-  private ebusMembers(busName: string): Node[] {
-    const bus = this.dump?.ebuses.find((b) => b.name === busName);
-    if (!bus) {
-      return [];
-    }
-    const keep = (name: string): boolean => this.matches(busName) || this.matches(name);
-    return sortByName(bus.senders.filter((s) => keep(s.name))).map<Node>((s) => {
-      const sig = signatureText(s.debugArgumentInfo);
-      const table = s.category === "Event" ? "Event" : s.category === "Broadcast" ? "Broadcast" : "Notification";
-      const insert =
-        s.category === "Notification"
-          ? `${s.name}` // handler callback name
-          : s.category === "Event"
-            ? `${busName}.Event.${s.name}($0)`
-            : `${busName}.Broadcast.${s.name}($0)`;
-      return {
-        kind: "member",
-        label: s.name,
-        detail: `${table}${sig}`,
-        tooltip: `**${busName}.${table}.${s.name}**${sig}\n\n_${table.toLowerCase()}_`,
-        insert,
-        icon: s.category === "Notification" ? "symbol-event" : "symbol-method",
-      };
+  private classContainers(): PaletteContainer[] {
+    return sortByName(this.dump?.classes ?? []).map((c) => {
+      const methods = sortByName(c.methods).map<PaletteMember>((m) => {
+        const sig = signatureText(m.debugArgumentInfo);
+        return {
+          label: m.name,
+          detail: sig,
+          tooltip: `${c.name}:${m.name}${sig} — method`,
+          insert: `${m.name}($0)`,
+          kind: "method",
+        };
+      });
+      const properties = sortByName(c.properties).map<PaletteMember>((p) => ({
+        label: p.name,
+        detail: p.canWrite ? "" : "read-only",
+        tooltip: `${c.name}.${p.name} — property (${p.canRead ? "R" : "-"}${p.canWrite ? "W" : "-"})`,
+        insert: p.name,
+        kind: "property",
+      }));
+      return { name: c.name, kind: "class", members: [...methods, ...properties] };
     });
   }
 
-  private globalNodes(): Node[] {
-    const fns = sortByName((this.dump?.globalFunctions ?? []).filter((f) => this.matches(f.name))).map<Node>((f) => {
+  private ebusContainers(): PaletteContainer[] {
+    return sortByName(this.dump?.ebuses ?? []).map((b) => {
+      const members = sortByName(b.senders).map<PaletteMember>((s) => {
+        const sig = signatureText(s.debugArgumentInfo);
+        const table = s.category === "Event" ? "Event" : s.category === "Broadcast" ? "Broadcast" : "Notification";
+        const insert =
+          s.category === "Notification"
+            ? `${s.name}` // handler callback name
+            : s.category === "Event"
+              ? `${b.name}.Event.${s.name}($0)`
+              : `${b.name}.Broadcast.${s.name}($0)`;
+        return {
+          label: s.name,
+          detail: `${table}${sig}`,
+          tooltip: `${b.name}.${table}.${s.name}${sig} — ${table.toLowerCase()}`,
+          insert,
+          kind: s.category === "Notification" ? "event" : "method",
+        };
+      });
+      return { name: b.name, kind: "ebus", members };
+    });
+  }
+
+  private globalMembers(): PaletteMember[] {
+    const fns = sortByName(this.dump?.globalFunctions ?? []).map<PaletteMember>((f) => {
       const sig = signatureText(f.debugArgumentInfo);
-      return {
-        kind: "member",
-        label: f.name,
-        detail: sig,
-        tooltip: `**${f.name}**${sig}\n\n_global function_`,
-        insert: `${f.name}($0)`,
-        icon: "symbol-function",
-      };
+      return { label: f.name, detail: sig, tooltip: `${f.name}${sig} — global function`, insert: `${f.name}($0)`, kind: "function" };
     });
-    const props = sortByName((this.dump?.globalProperties ?? []).filter((p) => this.matches(p.name))).map<Node>((p) => ({
-      kind: "member",
+    const props = sortByName(this.dump?.globalProperties ?? []).map<PaletteMember>((p) => ({
       label: p.name,
       detail: p.canWrite ? "" : "read-only",
-      tooltip: `**${p.name}**\n\n_global property_`,
+      tooltip: `${p.name} — global property`,
       insert: p.name,
-      icon: "symbol-variable",
+      kind: "variable",
     }));
     return [...fns, ...props];
+  }
+
+  // ---- HTML ----------------------------------------------------------------
+
+  private html(): string {
+    const nonce = getNonce();
+    const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
+    const initial = JSON.stringify(this.buildModel());
+    return PALETTE_HTML(csp, nonce, initial);
   }
 }
 
@@ -302,3 +221,276 @@ function signatureText(debugArgumentInfo: string): string {
 function sortByName<T extends { name: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+function getNonce(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let text = "";
+  for (let i = 0; i < 32; i++) {
+    text += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return text;
+}
+
+// ---- Webview document ------------------------------------------------------
+//
+//  Self-contained page. The extension posts { type:"model", model } and the
+//  script renders three collapsible categories (Classes / EBuses / Globals).
+//  The docked search input filters live: a container shows when its own name
+//  matches (all members visible) or when a member matches (only those visible);
+//  any active filter auto-expands the hits. Clicking a member posts its snippet.
+
+function PALETTE_HTML(csp: string, nonce: string, initial: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html, body { padding: 0; margin: 0; }
+    body { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: 13px; }
+
+    /* Docked search bar */
+    .search { position: sticky; top: 0; z-index: 2; padding: 6px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+    .search-wrap { position: relative; display: flex; align-items: center; }
+    .search-wrap .mag { position: absolute; left: 7px; opacity: 0.6; pointer-events: none; display: flex; }
+    #q {
+      width: 100%; box-sizing: border-box; height: 26px; padding: 0 24px 0 26px;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; outline: none;
+      font-family: var(--vscode-font-family); font-size: 12px;
+    }
+    #q:focus { border-color: var(--vscode-focusBorder); }
+    #q::placeholder { color: var(--vscode-input-placeholderForeground); }
+    .clear { position: absolute; right: 5px; display: none; cursor: pointer; opacity: 0.7; border: none; background: transparent; color: inherit; padding: 2px; }
+    .clear:hover { opacity: 1; }
+    .search.filtering .clear { display: flex; }
+
+    /* Tree */
+    .tree { padding: 2px 0 8px; }
+    .cat > .cat-hdr {
+      display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box;
+      padding: 3px 8px; cursor: pointer; background: transparent; border: none; color: var(--vscode-descriptionForeground);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .cat > .cat-hdr:hover { background: var(--vscode-list-hoverBackground); }
+    .row {
+      display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box;
+      padding: 3px 8px; cursor: pointer; background: transparent; border: none; color: var(--vscode-foreground);
+      text-align: left; font-family: var(--vscode-font-family); font-size: 13px;
+    }
+    .row:hover { background: var(--vscode-list-hoverBackground); }
+    .row.container { color: var(--vscode-foreground); }
+    .row.member { padding-left: 28px; }
+    .chev { width: 12px; flex: 0 0 auto; opacity: 0.8; transition: transform 100ms ease; display: inline-flex; justify-content: center; }
+    .chev.open { transform: rotate(90deg); }
+    .chev.leaf { visibility: hidden; }
+    .ico { width: 16px; height: 16px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+    .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail { color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+    .count { color: var(--vscode-descriptionForeground); opacity: 0.7; font-weight: 400; }
+
+    /* symbol-kind icon colors (fall back to foreground) */
+    .k-method, .k-function { color: var(--vscode-symbolIcon-methodForeground, #b180d7); }
+    .k-property, .k-variable { color: var(--vscode-symbolIcon-propertyForeground, var(--vscode-foreground)); }
+    .k-event { color: var(--vscode-symbolIcon-eventForeground, #d67e3c); }
+    .k-class { color: var(--vscode-symbolIcon-classForeground, #ee9d28); }
+    .k-ebus { color: var(--vscode-symbolIcon-eventForeground, #d67e3c); }
+
+    /* Empty / no-dump states */
+    .empty { padding: 14px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.5; }
+    .empty button {
+      margin-top: 10px; height: 28px; padding: 0 12px; border: none; border-radius: 4px; cursor: pointer;
+      color: var(--vscode-button-foreground); background: var(--vscode-button-background); font-size: 12px; font-weight: 600;
+    }
+    .empty button:hover { background: var(--vscode-button-hoverBackground); }
+  </style>
+</head>
+<body>
+  <div class="search" id="search">
+    <div class="search-wrap">
+      <span class="mag">${MAG_SVG}</span>
+      <input id="q" type="text" placeholder="Filter classes, methods, EBuses…" spellcheck="false" autocomplete="off" />
+      <button class="clear" id="clear" title="Clear filter">${X_SVG}</button>
+    </div>
+  </div>
+  <div class="tree" id="tree"></div>
+
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const ICONS = ${JSON.stringify(KIND_ICONS)};
+    const CHEV_SVG = ${JSON.stringify(CHEV_SVG)};
+    let model = ${initial};
+
+    const treeEl = document.getElementById('tree');
+    const searchEl = document.getElementById('search');
+    const q = document.getElementById('q');
+    const clearBtn = document.getElementById('clear');
+
+    // Expand state (ephemeral) for the no-filter view. Categories start collapsed.
+    const openCats = new Set();
+    const openContainers = new Set();
+
+    function send(msg) { vscode.postMessage(msg); }
+    const norm = (s) => s.toLowerCase();
+
+    // ---- Filtering ----
+    function filterContainer(c, f) {
+      if (!f) { return { name: c.name, kind: c.kind, members: c.members, all: true }; }
+      if (norm(c.name).includes(f)) { return { name: c.name, kind: c.kind, members: c.members, all: true }; }
+      const members = c.members.filter((m) => norm(m.label).includes(f));
+      return members.length ? { name: c.name, kind: c.kind, members, all: false } : null;
+    }
+
+    // ---- Rendering ----
+    function iconSpan(kind) {
+      const s = document.createElement('span');
+      s.className = 'ico k-' + kind;
+      s.innerHTML = ICONS[kind] || '';
+      return s;
+    }
+    function memberRow(m) {
+      const row = document.createElement('button');
+      row.className = 'row member';
+      row.title = m.tooltip;
+      const chev = document.createElement('span'); chev.className = 'chev leaf'; row.appendChild(chev);
+      row.appendChild(iconSpan(m.kind));
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = m.label; row.appendChild(name);
+      if (m.detail) { const d = document.createElement('span'); d.className = 'detail'; d.textContent = m.detail; row.appendChild(d); }
+      row.onclick = () => send({ type: 'insert', text: m.insert });
+      return row;
+    }
+    // Per-frame row budget: a broad 1–2 char filter can match thousands of rows;
+    // building them all in one frame janks. We cap rows rendered per rebuild and
+    // append a "keep typing" note — narrowing the filter reveals the rest.
+    const MAX_ROWS = 400;
+
+    function appendContainer(sec, c, forceOpen, budget) {
+      if (budget.left <= 0) { budget.truncated = true; return; }
+      budget.left--;
+      const open = forceOpen || openContainers.has(c.kind + ':' + c.name);
+      const row = document.createElement('button'); row.className = 'row container';
+      const chev = document.createElement('span'); chev.className = 'chev' + (open ? ' open' : ''); chev.innerHTML = CHEV_SVG; row.appendChild(chev);
+      row.appendChild(iconSpan(c.kind));
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = c.name; row.appendChild(name);
+      const cnt = document.createElement('span'); cnt.className = 'detail'; cnt.textContent = c.members.length; row.appendChild(cnt);
+      row.onclick = () => {
+        const key = c.kind + ':' + c.name;
+        if (openContainers.has(key)) { openContainers.delete(key); } else { openContainers.add(key); }
+        scheduleRender();
+      };
+      sec.appendChild(row);
+      if (open) {
+        for (const m of c.members) {
+          if (budget.left <= 0) { budget.truncated = true; break; }
+          budget.left--;
+          sec.appendChild(memberRow(m));
+        }
+      }
+    }
+    function categorySection(key, title, containers, forceOpen, budget) {
+      const sec = document.createElement('div'); sec.className = 'cat';
+      const open = forceOpen || openCats.has(key);
+      const hdr = document.createElement('button'); hdr.className = 'cat-hdr';
+      const chev = document.createElement('span'); chev.className = 'chev' + (open ? ' open' : ''); chev.innerHTML = CHEV_SVG; hdr.appendChild(chev);
+      const t = document.createElement('span'); t.textContent = title; hdr.appendChild(t);
+      const cnt = document.createElement('span'); cnt.className = 'count'; cnt.textContent = '(' + containers.length + ')'; hdr.appendChild(cnt);
+      hdr.onclick = () => { if (openCats.has(key)) { openCats.delete(key); } else { openCats.add(key); } scheduleRender(); };
+      sec.appendChild(hdr);
+      if (open) { for (const c of containers) { if (budget.left <= 0) { budget.truncated = true; break; } appendContainer(sec, c, forceOpen, budget); } }
+      return sec;
+    }
+    function globalsSection(members, forceOpen, budget) {
+      const sec = document.createElement('div'); sec.className = 'cat';
+      const open = forceOpen || openCats.has('globals');
+      const hdr = document.createElement('button'); hdr.className = 'cat-hdr';
+      const chev = document.createElement('span'); chev.className = 'chev' + (open ? ' open' : ''); chev.innerHTML = CHEV_SVG; hdr.appendChild(chev);
+      const t = document.createElement('span'); t.textContent = 'Globals'; hdr.appendChild(t);
+      const cnt = document.createElement('span'); cnt.className = 'count'; cnt.textContent = '(' + members.length + ')'; hdr.appendChild(cnt);
+      hdr.onclick = () => { if (openCats.has('globals')) { openCats.delete('globals'); } else { openCats.add('globals'); } scheduleRender(); };
+      sec.appendChild(hdr);
+      if (open) { for (const m of members) { if (budget.left <= 0) { budget.truncated = true; break; } budget.left--; sec.appendChild(memberRow(m)); } }
+      return sec;
+    }
+
+    function render() {
+      if (!model.hasDump) {
+        const box = document.createElement('div'); box.className = 'empty';
+        box.append('No reflected API yet. Generate it from the running Editor to browse the O3DE Lua API here.');
+        const b = document.createElement('button'); b.textContent = 'Generate Lua IntelliSense';
+        b.onclick = () => send({ type: 'generate' }); box.appendChild(document.createElement('br')); box.appendChild(b);
+        treeEl.replaceChildren(box);
+        return;
+      }
+      const f = norm(q.value.trim());
+      searchEl.classList.toggle('filtering', f !== '');
+
+      const classes = model.classes.map((c) => filterContainer(c, f)).filter(Boolean);
+      const ebuses = model.ebuses.map((c) => filterContainer(c, f)).filter(Boolean);
+      const globals = f ? model.globals.filter((m) => norm(m.label).includes(f)) : model.globals;
+
+      if (f && !classes.length && !ebuses.length && !globals.length) {
+        const box = document.createElement('div'); box.className = 'empty';
+        box.textContent = 'No API symbols match "' + q.value.trim() + '".';
+        treeEl.replaceChildren(box);
+        return;
+      }
+
+      // A filter forces categories + matching containers open so hits are visible.
+      const forced = f !== '';
+      const budget = { left: MAX_ROWS, truncated: false };
+      const frag = document.createDocumentFragment();
+      frag.appendChild(categorySection('classes', 'Classes', classes, forced, budget));
+      frag.appendChild(categorySection('ebuses', 'EBuses', ebuses, forced, budget));
+      frag.appendChild(globalsSection(globals, forced, budget));
+      if (budget.truncated) {
+        const note = document.createElement('div'); note.className = 'empty';
+        note.textContent = 'Showing the first ' + MAX_ROWS + ' rows — keep typing to narrow.';
+        frag.appendChild(note);
+      }
+      treeEl.replaceChildren(frag); // one reflow per frame
+    }
+
+    // Coalesce rebuilds to one per animation frame so the keystroke paints first
+    // (typing stays responsive) and fast typing never queues N full rebuilds.
+    let rafPending = false;
+    function scheduleRender() {
+      if (rafPending) { return; }
+      rafPending = true;
+      requestAnimationFrame(() => { rafPending = false; render(); });
+    }
+
+    // ---- Wiring ----
+    q.addEventListener('input', scheduleRender);
+    clearBtn.onclick = () => { q.value = ''; q.focus(); scheduleRender(); };
+    window.addEventListener('message', (e) => {
+      const m = e.data;
+      if (m && m.type === 'model') { model = m.model; render(); }
+    });
+    render();
+  </script>
+</body>
+</html>`;
+}
+
+// ---- Inline SVGs (webview) -------------------------------------------------
+
+const MAG_SVG =
+  '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">' +
+  '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></svg>';
+const X_SVG =
+  '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
+  '<path d="M4 4l8 8M12 4l-8 8"/></svg>';
+const CHEV_SVG =
+  '<svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>';
+
+// Per-kind glyphs coloured by the .k-<kind> classes above.
+const KIND_ICONS: Record<string, string> = {
+  class: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>',
+  ebus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="1.8"/><path d="M4.7 4.7a4.7 4.7 0 0 0 0 6.6M11.3 4.7a4.7 4.7 0 0 1 0 6.6"/></svg>',
+  method: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.2 13.5 5.4v5.2L8 13.8 2.5 10.6V5.4L8 2.2zm0 1.6L4 6.1v3.8L8 12.2l4-2.3V6.1L8 3.8z"/></svg>',
+  function: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.2 13.5 5.4v5.2L8 13.8 2.5 10.6V5.4L8 2.2zm0 1.6L4 6.1v3.8L8 12.2l4-2.3V6.1L8 3.8z"/></svg>',
+  property: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="5.5" width="9" height="5" rx="1"/></svg>',
+  variable: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="5.5" width="9" height="5" rx="1"/></svg>',
+  event: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 2 3.5 9H7l-1 5 5.5-7.2H8L9 2z"/></svg>',
+};
