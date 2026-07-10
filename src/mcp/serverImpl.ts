@@ -28,10 +28,14 @@ const MCP_PATH = "/mcp";
 const HOST = "127.0.0.1";
 const SESSION_HEADER = "mcp-session-id";
 
-// o3de_build holds the call open only briefly — long enough for a quick
-// incremental to return inline, short enough to stay under any MCP client
-// timeout. A build that runs longer returns a poll handle (status/log tools).
-const INLINE_WAIT_MS = 20_000;
+// o3de_build BLOCKS by default and returns the full result in one call. When the
+// client sends a progressToken we hold the (SSE) response open up to MAX_BLOCK_MS,
+// emitting progress heartbeats every HEARTBEAT_MS (which keep the client's timeout
+// reset and stop any reverse proxy idle-killing the stream). Past the cap — or with
+// no progressToken — it hands back a poll handle (o3de_build_status/o3de_build_log).
+const MAX_BLOCK_MS = 20 * 60_000; // cap on a held-open (progress-streamed) build
+const HEARTBEAT_MS = 5_000; // progress cadence while blocking
+const INLINE_WAIT_MS = 20_000; // no progress token → short wait, then a handle
 
 export interface McpHttpOptions {
   port: number;
@@ -53,6 +57,11 @@ export async function startMcpHttpServer(opts: McpHttpOptions): Promise<McpHttpH
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
   const server = http.createServer((req, res) => void handleRequest(req, res, opts, sessions));
+  // A blocking o3de_build can hold its SSE response open for many minutes; Node's
+  // default 5-min requestTimeout would sever it, so disable it. keepAliveTimeout is
+  // per-connection idle between requests and doesn't cap an in-flight response.
+  server.requestTimeout = 0;
+  server.keepAliveTimeout = 65_000;
   const port = await listen(server, opts.port);
   log().info(`LLM (MCP) endpoint listening on http://${HOST}:${port}${MCP_PATH}`);
 
@@ -142,7 +151,8 @@ async function handleRequest(
     // New session — the initialize handshake mints an id we hand back to the client.
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true,
+      // SSE mode (not enableJsonResponse) so a blocking o3de_build can stream
+      // notifications/progress heartbeats while the build runs.
       onsessioninitialized: (id) => {
         sessions.set(id, transport);
       },
@@ -189,9 +199,10 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
         "Build the O3DE project (cmake --build) and return structured pass/fail plus parsed compiler/linker " +
         "diagnostics — so you can compile a change and react to the errors. Windows/MSVC only. The Editor must " +
         "be CLOSED (a running Editor locks gem DLLs and the link step fails; reports blocked:editor-running if so). " +
-        "Long builds run in the BACKGROUND: if this call returns a buildId with state:running, poll o3de_build_status " +
-        "and then o3de_build_log (they default to the latest build). The finished result is also written to " +
-        "<project>/user/o3de-build-result.json. Targets/config default to the O3DE panel selection.",
+        "This BLOCKS until the build finishes and returns the full result in one call (progress is streamed while " +
+        "it runs) — no polling needed in the normal case. Only if a build exceeds ~20 min does it return a buildId " +
+        "with state:running, after which you poll o3de_build_status then o3de_build_log. The finished result is also " +
+        "written to <project>/user/o3de-build-result.json. Targets/config default to the O3DE panel selection.",
       inputSchema: {
         targets: z
           .array(z.string())
@@ -208,15 +219,29 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
       const targets = args.targets ?? opts.buildOptions.targets;
       const job = startBuildJob({ generator: opts.buildOptions.generator, config, targets });
 
-      // Brief hold so a quick incremental returns inline; a longer build returns a
-      // poll handle before the client's request window closes.
+      // Block until done, streaming progress heartbeats if the client gave us a
+      // token (keeps the SSE connection alive + resets the client timeout). With a
+      // token we hold up to MAX_BLOCK_MS; without one, only a short safe window.
+      const progressToken = extra?._meta?.progressToken;
+      const maxWaitMs = progressToken !== undefined ? MAX_BLOCK_MS : INLINE_WAIT_MS;
       const started = Date.now();
-      while (!job.result && Date.now() - started < INLINE_WAIT_MS && !extra?.signal?.aborted) {
-        await delay(500);
+      let step = 0;
+      while (!job.result && Date.now() - started < maxWaitMs && !extra?.signal?.aborted) {
+        await delay(progressToken !== undefined ? HEARTBEAT_MS : 500);
+        if (progressToken !== undefined && !job.result) {
+          step += 1;
+          const elapsed = Math.round((Date.now() - job.startedAt) / 1000);
+          await extra
+            .sendNotification({
+              method: "notifications/progress",
+              params: { progressToken, progress: step, message: `Building ${config}… ${elapsed}s elapsed` },
+            })
+            .catch(() => undefined); // client not listening — ignore
+        }
       }
 
       if (job.result) {
-        return buildResultContent(job.result); // finished within the window — return inline
+        return buildResultContent(job.result); // finished — return the full result inline
       }
       return {
         content: [

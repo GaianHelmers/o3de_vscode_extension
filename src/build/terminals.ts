@@ -9,7 +9,11 @@
 
 import * as vscode from "vscode";
 
-export function freshTerminal(name: string, env?: NodeJS.ProcessEnv): vscode.Terminal {
+export function freshTerminal(
+  name: string,
+  env?: NodeJS.ProcessEnv,
+  shellPath?: string,
+): vscode.Terminal {
   vscode.window.terminals.filter((t) => t.name === name).forEach((t) => t.dispose());
-  return vscode.window.createTerminal({ name, env });
+  return vscode.window.createTerminal({ name, env, shellPath });
 }
