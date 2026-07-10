@@ -86,7 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void deps.refresh(); // refresh the Optional row's dot/detail
   };
   if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
-    void mcpServer.start();
+    void mcpServer.start().then(() => deps.refresh()); // re-detect once the port is live
   }
   const mcpConfigListener = vscode.workspace.onDidChangeConfiguration((e) => {
     if (
@@ -100,8 +100,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Commands: enable / disable the LLM endpoint + show the client connection info.
   const llmEnable = vscode.commands.registerCommand("o3de.llm.enable", async () => {
+    // Complete, idempotent setup: turn it on, ensure the server is actually
+    // listening, and write .mcp.json into the project — so it's genuinely
+    // connectable, not just flagged "on".
     await vscode.workspace.getConfiguration("o3de").update("llm.enabled", true, vscode.ConfigurationTarget.Global);
-    void vscode.commands.executeCommand("o3de.llm.showConnectionInfo");
+    await mcpServer.start(); // idempotent (no-op if already running)
+    mcpServer.writeClientConfig(); // merge our entry into the project's .mcp.json
+    void deps.refresh();
+    const info = mcpServer.connectionInfo();
+    void vscode.window.showInformationMessage(
+      `O3DE: LLM connections on — endpoint ${info.url}. .mcp.json updated; run “/mcp” in Claude to connect.`,
+      "Show Connection Info",
+    ).then((choice) => {
+      if (choice === "Show Connection Info") {
+        void vscode.commands.executeCommand("o3de.llm.showConnectionInfo");
+      }
+    });
   });
   const llmDisable = vscode.commands.registerCommand("o3de.llm.disable", async () => {
     await vscode.workspace.getConfiguration("o3de").update("llm.enabled", false, vscode.ConfigurationTarget.Global);
@@ -118,10 +132,13 @@ export function activate(context: vscode.ExtensionContext): void {
     log().show(true);
     const pick = await vscode.window.showInformationMessage(
       `O3DE LLM endpoint: ${info.url}`,
+      "Write .mcp.json",
       "Copy .mcp.json",
       "Copy Token",
     );
-    if (pick === "Copy .mcp.json") {
+    if (pick === "Write .mcp.json") {
+      await mcpServer.writeClientConfigInteractive();
+    } else if (pick === "Copy .mcp.json") {
       await vscode.env.clipboard.writeText(info.mcpJson);
     } else if (pick === "Copy Token") {
       await vscode.env.clipboard.writeText(info.token);

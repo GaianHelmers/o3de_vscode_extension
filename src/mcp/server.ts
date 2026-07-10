@@ -15,11 +15,39 @@ import * as crypto from "crypto";
 import { log } from "../log";
 import { BuildOptions } from "../build/buildOptions";
 import { readProject } from "../o3de/identity";
-import { writeMcpServerEntry, removeMcpServerEntry } from "./mcpConfig";
+import { writeMcpServerEntry, removeMcpServerEntry, mcpConfigPath, hasMcpServerEntry, SERVER_NAME } from "./mcpConfig";
 import type { McpHttpHandle } from "./serverImpl";
 
 const TOKEN_KEY = "o3de.llm.token";
 const DEFAULT_PORT = 8975;
+
+// The port the endpoint is actually bound to right now (undefined when stopped).
+// Published so the Onboarding row can show the TRUE port, not the raw setting.
+let livePort: number | undefined;
+
+/** The live endpoint port, or undefined when the endpoint isn't running. */
+export function liveEndpointPort(): number | undefined {
+  return livePort;
+}
+
+//  The TRUE functional state — not just the setting. "on" only when the server is
+//  actually listening AND the project's .mcp.json has our entry (i.e. a client
+//  could really connect). Anything short of that is "incomplete", so onboarding
+//  stops claiming it works when it doesn't.
+export type LlmConnectionState = "off" | "incomplete" | "on";
+
+export function llmConnectionStatus(): { state: LlmConnectionState; port?: number; hasConfig: boolean } {
+  const enabled = vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false);
+  if (!enabled) {
+    return { state: "off", hasConfig: false };
+  }
+  const root = projectRoot();
+  const hasConfig = root ? hasMcpServerEntry(root) : false;
+  if (livePort !== undefined && hasConfig) {
+    return { state: "on", port: livePort, hasConfig };
+  }
+  return { state: "incomplete", port: livePort, hasConfig };
+}
 
 export class O3deMcpServer {
   private handle: McpHttpHandle | undefined;
@@ -66,6 +94,7 @@ export class O3deMcpServer {
         version,
         buildOptions: this.buildOptions,
       });
+      livePort = this.handle.port; // publish the actual bound port (for the Optional row / status)
       this.writeClientConfig(); // keep the project's .mcp.json in sync with the live port
     } catch (err) {
       log().error(`Failed to start the LLM (MCP) endpoint: ${message(err)}`);
@@ -82,6 +111,7 @@ export class O3deMcpServer {
       return;
     }
     this.handle = undefined;
+    livePort = undefined;
     try {
       await handle.close();
       log().info("LLM (MCP) endpoint stopped.");
@@ -99,7 +129,7 @@ export class O3deMcpServer {
   /** The connection details a client (Claude Code `.mcp.json`) needs. */
   connectionInfo(): { url: string; token: string; mcpJson: string } {
     const entry = this.serverEntry();
-    return { url: entry.url, token: this.token, mcpJson: JSON.stringify({ mcpServers: { o3de: entry } }, null, 2) };
+    return { url: entry.url, token: this.token, mcpJson: JSON.stringify({ mcpServers: { [SERVER_NAME]: entry } }, null, 2) };
   }
 
   /** Auto-merge our entry into the project's .mcp.json (setting-gated). */
@@ -109,9 +139,36 @@ export class O3deMcpServer {
     }
     const root = projectRoot();
     if (!root) {
-      return; // no project folder to write into
+      log().info(
+        "LLM (MCP): no project folder open, so .mcp.json was not written. Open your O3DE project folder, " +
+          "or run “O3DE: Show LLM Connection Info” → “Write .mcp.json” to choose a location.",
+      );
+      return;
     }
     writeMcpServerEntry(root, this.serverEntry());
+  }
+
+  /** Write .mcp.json for the user, prompting for a folder when there's no project root. */
+  async writeClientConfigInteractive(): Promise<void> {
+    let root = projectRoot();
+    if (!root) {
+      const pick = await vscode.window.showOpenDialog({
+        canSelectFolders: true,
+        canSelectFiles: false,
+        canSelectMany: false,
+        title: "No project folder open — pick the folder where you run Claude (its .mcp.json)",
+        openLabel: "Write .mcp.json here",
+      });
+      root = pick?.[0]?.fsPath;
+    }
+    if (!root) {
+      return;
+    }
+    writeMcpServerEntry(root, this.serverEntry());
+    const choice = await vscode.window.showInformationMessage(`O3DE: wrote .mcp.json → ${root}`, "Open .mcp.json");
+    if (choice === "Open .mcp.json") {
+      await vscode.window.showTextDocument(vscode.Uri.file(mcpConfigPath(root)));
+    }
   }
 
   /** Remove our entry from the project's .mcp.json (on disable). */

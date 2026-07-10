@@ -16,6 +16,7 @@ import { findNinja } from "../build/ninja";
 import { readManifest } from "../o3de/manifest";
 import { discoverEngines } from "../o3de/discovery";
 import { readProject, readEngine } from "../o3de/identity";
+import { llmConnectionStatus } from "../mcp/server";
 
 export type CheckState = "ok" | "missing" | "warn" | "absent" | "unknown";
 export interface CheckResult {
@@ -226,11 +227,22 @@ export async function detectPerforce(): Promise<CheckResult> {
 }
 
 // LLM connections (local MCP endpoint) — a setting toggle, not an installable
-// tool. "ok" when on (with the port as detail), "absent" (grey) when off.
+// tool. Reports the TRUE state (server listening AND .mcp.json present), so it
+// never claims "on" when a client couldn't actually connect:
+//   off        → absent (grey)  → "Set up LLM connections" button
+//   incomplete → warn (yellow)  → enabled but no server and/or no .mcp.json
+//   on         → ok (green)     → "on · port N"
 export function detectLlmConnections(): CheckResult {
-  const cfg = vscode.workspace.getConfiguration("o3de");
-  if (!cfg.get<boolean>("llm.enabled", false)) {
+  const status = llmConnectionStatus();
+  if (status.state === "off") {
     return { state: "absent" };
   }
-  return { state: "ok", detail: `on · port ${cfg.get<number>("llm.port", 8975)}` };
+  if (status.state === "on") {
+    return { state: "ok", detail: `on · port ${status.port}` };
+  }
+  const why =
+    status.port === undefined
+      ? "enabled, but the server isn't running"
+      : `server on :${status.port}, but no .mcp.json — click to finish setup`;
+  return { state: "warn", detail: `not connected — ${why}` };
 }

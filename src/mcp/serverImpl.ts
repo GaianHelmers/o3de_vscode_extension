@@ -20,11 +20,18 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { log } from "../log";
 import { BuildOptions, BuildConfig } from "../build/buildOptions";
-import { runBuildHeadless } from "../build/buildRun";
+import { startBuildJob, getBuildJob } from "../build/buildJobs";
+import { BuildResult } from "../build/buildOutput";
+import { configSnapshot, applyConfig, listTargets } from "../build/configQuery";
 
 const MCP_PATH = "/mcp";
 const HOST = "127.0.0.1";
 const SESSION_HEADER = "mcp-session-id";
+
+// o3de_build holds the call open only briefly — long enough for a quick
+// incremental to return inline, short enough to stay under any MCP client
+// timeout. A build that runs longer returns a poll handle (status/log tools).
+const INLINE_WAIT_MS = 20_000;
 
 export interface McpHttpOptions {
   port: number;
@@ -171,7 +178,7 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
       description: "Health check — confirms the O3DE Development Tools MCP endpoint is live and reachable.",
       inputSchema: {},
     },
-    async () => ({ content: [{ type: "text" as const, text: `o3de-development-tools ${opts.version} — ready` }] }),
+    async () => ({ content: [{ type: "text" as const, text: `O3DE Development Tools ${opts.version} — ready` }] }),
   );
 
   server.registerTool(
@@ -181,8 +188,10 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
       description:
         "Build the O3DE project (cmake --build) and return structured pass/fail plus parsed compiler/linker " +
         "diagnostics — so you can compile a change and react to the errors. Windows/MSVC only. The Editor must " +
-        "be CLOSED (a running Editor locks gem DLLs and the link step fails; the tool reports blocked:editor-running " +
-        "if so). Targets/config default to the selection in the O3DE panel.",
+        "be CLOSED (a running Editor locks gem DLLs and the link step fails; reports blocked:editor-running if so). " +
+        "Long builds run in the BACKGROUND: if this call returns a buildId with state:running, poll o3de_build_status " +
+        "and then o3de_build_log (they default to the latest build). The finished result is also written to " +
+        "<project>/user/o3de-build-result.json. Targets/config default to the O3DE panel selection.",
       inputSchema: {
         targets: z
           .array(z.string())
@@ -194,26 +203,184 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
           .describe("Build configuration. Omit to use the panel selection."),
       },
     },
-    async (args: { targets?: string[]; config?: BuildConfig }) => {
-      const result = await runBuildHeadless({
-        generator: opts.buildOptions.generator,
-        config: args.config ?? opts.buildOptions.config,
-        targets: args.targets ?? opts.buildOptions.targets,
-      });
-      const headline = result.blocked ? `${result.summary} (blocked: ${result.blocked})` : result.summary;
+    async (args: { targets?: string[]; config?: BuildConfig }, extra) => {
+      const config = args.config ?? opts.buildOptions.config;
+      const targets = args.targets ?? opts.buildOptions.targets;
+      const job = startBuildJob({ generator: opts.buildOptions.generator, config, targets });
+
+      // Brief hold so a quick incremental returns inline; a longer build returns a
+      // poll handle before the client's request window closes.
+      const started = Date.now();
+      while (!job.result && Date.now() - started < INLINE_WAIT_MS && !extra?.signal?.aborted) {
+        await delay(500);
+      }
+
+      if (job.result) {
+        return buildResultContent(job.result); // finished within the window — return inline
+      }
       return {
         content: [
-          { type: "text" as const, text: headline },
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          {
+            type: "text" as const,
+            text:
+              `Build started — id ${job.buildId} (config ${config}, targets [${targets.join(", ") || "all"}]). ` +
+              `Still running after ${Math.round((Date.now() - started) / 1000)}s; this is normal for a full build. ` +
+              `Poll o3de_build_status until state:done, then o3de_build_log for the structured result ` +
+              `(both default to the latest build — no argument needed). It's also written to ` +
+              `${job.resultPath ?? "<project>/user/o3de-build-result.json"} when finished.`,
+          },
         ],
-        // A build that ran and failed is a valid result (errors listed); only a
-        // couldn't-run "blocked" state is surfaced as a tool error.
-        isError: result.blocked !== undefined,
       };
     },
   );
 
+  server.registerTool(
+    "o3de_build_status",
+    {
+      title: "O3DE Build Status",
+      description:
+        "Check whether the most recent o3de_build is still running or finished, with elapsed time and a one-line " +
+        "summary. Poll this after o3de_build returns state:running. Defaults to the latest build.",
+      inputSchema: { buildId: z.string().optional().describe("Omit for the latest build.") },
+    },
+    async (args: { buildId?: string }) => {
+      const job = getBuildJob(args.buildId);
+      if (!job) {
+        return { content: [{ type: "text" as const, text: "No build has been started this session." }] };
+      }
+      const elapsed = Math.round(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000);
+      const status = {
+        buildId: job.buildId,
+        state: job.state,
+        config: job.params.config,
+        targets: job.params.targets,
+        elapsedSeconds: elapsed,
+        ok: job.result?.ok,
+        blocked: job.result?.blocked,
+        summary: job.result?.summary,
+        resultPath: job.resultPath,
+      };
+      const line = job.state === "done" ? job.result?.summary ?? "done" : `Building… (${elapsed}s elapsed)`;
+      return { content: [{ type: "text" as const, text: line }, { type: "text" as const, text: JSON.stringify(status, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    "o3de_build_log",
+    {
+      title: "O3DE Build Log",
+      description:
+        "Get the full structured result of the most recent o3de_build once it has finished: pass/fail, parsed " +
+        "compiler/linker errors and warnings (file:line:code), the exact command, and the tail of raw output. " +
+        "Defaults to the latest build.",
+      inputSchema: { buildId: z.string().optional().describe("Omit for the latest build.") },
+    },
+    async (args: { buildId?: string }) => {
+      const job = getBuildJob(args.buildId);
+      if (!job) {
+        return { content: [{ type: "text" as const, text: "No build has been started this session." }] };
+      }
+      if (job.state !== "done" || !job.result) {
+        const elapsed = Math.round((Date.now() - job.startedAt) / 1000);
+        return {
+          content: [
+            { type: "text" as const, text: `Build ${job.buildId} is still running (${elapsed}s). Poll o3de_build_status until state:done.` },
+          ],
+        };
+      }
+      return buildResultContent(job.result);
+    },
+  );
+
+  // ---- Config get / set + target discovery ---------------------------------
+  server.registerTool(
+    "o3de_get_config",
+    {
+      title: "O3DE Get Config",
+      description:
+        "Read the current O3DE build options — generator, compiler, build config, selected targets, run target, " +
+        "launch args — plus the valid choices for each and the resolved project + build directory. Use this before " +
+        "o3de_set_config or o3de_build to see the current state and what's allowed.",
+      inputSchema: {},
+    },
+    async () => {
+      const snap = configSnapshot(opts.buildOptions);
+      const line = `config=${snap.config}, generator=${snap.generator}, compiler=${snap.compiler}, targets=[${snap.targets.join(", ") || "all"}], runTarget=${snap.runTarget}`;
+      return { content: [txt(line), txt(JSON.stringify(snap, null, 2))] };
+    },
+  );
+
+  server.registerTool(
+    "o3de_set_config",
+    {
+      title: "O3DE Set Config",
+      description:
+        "Change one or more O3DE build options (the same state the panel shows and that o3de_build/o3de_run use). " +
+        "Only the fields you pass change; others are left alone. Returns the updated config. Note: changing the " +
+        "generator usually requires re-running “O3DE: Configure Project” before the next build.",
+      inputSchema: {
+        generator: z.enum(["Ninja Multi-Config", "Visual Studio 17 2022"]).optional(),
+        compiler: z.enum(["MSVC", "Clang"]).optional(),
+        config: z.enum(["profile", "debug", "release"]).optional(),
+        targets: z
+          .array(z.string())
+          .optional()
+          .describe("CMake target names to build by default; [] = build everything."),
+        runTarget: z.enum(["Editor", "GameLauncher"]).optional(),
+        launchArgs: z.string().optional().describe("Extra args passed when running (blank to clear)."),
+      },
+    },
+    async (args) => {
+      const applied = await applyConfig(opts.buildOptions, args);
+      const snap = configSnapshot(opts.buildOptions);
+      const line = applied.length ? `Updated: ${applied.join(", ")}.` : "No changes — no fields provided.";
+      return { content: [txt(line), txt(JSON.stringify(snap, null, 2))] };
+    },
+  );
+
+  server.registerTool(
+    "o3de_list_targets",
+    {
+      title: "O3DE List Targets",
+      description:
+        "List every buildable CMake target for a config (from the CMake File API reply) so you can build a specific " +
+        "gem/target purposefully — beyond the panel's default selection. Pass a name from here to o3de_build (or " +
+        "o3de_set_config targets). Requires the project to have been configured at least once.",
+      inputSchema: { config: z.enum(["profile", "debug", "release"]).optional().describe("Omit for the current config.") },
+    },
+    async (args: { config?: BuildConfig }) => {
+      const list = listTargets(opts.buildOptions, args.config);
+      const line = list.configured
+        ? `${list.targets.length} target(s) for ${list.config}`
+        : list.note ?? "not configured";
+      return { content: [txt(line), txt(JSON.stringify(list, null, 2))] };
+    },
+  );
+
   return server;
+}
+
+/** A text content block (keeps the tool handlers terse). */
+function txt(text: string): { type: "text"; text: string } {
+  return { type: "text", text };
+}
+
+/** Shape a finished BuildResult into the tool response (summary line + full JSON). */
+function buildResultContent(result: BuildResult): { content: { type: "text"; text: string }[]; isError: boolean } {
+  const headline = result.blocked ? `${result.summary} (blocked: ${result.blocked})` : result.summary;
+  return {
+    content: [
+      { type: "text", text: headline },
+      { type: "text", text: JSON.stringify(result, null, 2) },
+    ],
+    // A build that ran and failed is a valid result (errors listed); only a
+    // couldn't-run "blocked" state is surfaced as a tool error.
+    isError: result.blocked !== undefined,
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---- Small http helpers ----------------------------------------------------

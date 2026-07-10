@@ -288,13 +288,14 @@ export const CHECKS: DependencyCheck[] = [
     label: "LLM connections (MCP)",
     what:
       "Expose a local MCP endpoint on 127.0.0.1 so an assistant like Claude can trigger builds and read " +
-      "structured results — no rebuilt scripts. Off by default; localhost-bound and bearer-token gated. " +
-      "Run “O3DE: Show LLM Connection Info” for the client config.",
+      "structured results — no rebuilt scripts. Off by default; localhost-bound. Setting up starts the server " +
+      "and writes this project's .mcp.json so a client (Claude Code) can connect. Yellow = enabled but not " +
+      "actually connectable yet (no server and/or no .mcp.json).",
     category: "system",
     tier: "optional",
     track: "optional",
     detect: d.detectLlmConnections,
-    action: { label: "Enable LLM connections", kind: "command", payload: "o3de.llm.enable" },
+    action: { label: "Set up LLM connections", kind: "command", payload: "o3de.llm.enable" },
   },
 ];
 
