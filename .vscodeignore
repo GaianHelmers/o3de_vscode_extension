@@ -17,3 +17,4 @@ tsconfig.json
 scripts/**
 **/*.ts
 **/*.map
+docs/o3de-category-bridge-spec.md

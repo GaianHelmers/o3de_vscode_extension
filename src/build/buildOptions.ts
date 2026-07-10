@@ -11,12 +11,15 @@ import * as vscode from "vscode";
 export type Generator = "Ninja Multi-Config" | "Visual Studio 17 2022";
 export type BuildConfig = "profile" | "debug" | "release";
 export type RunTarget = "Editor" | "GameLauncher";
+export type Compiler = "MSVC" | "Clang";
 
 export const GENERATORS: Generator[] = ["Ninja Multi-Config", "Visual Studio 17 2022"];
 export const BUILD_CONFIGS: BuildConfig[] = ["profile", "debug", "release"];
 export const RUN_TARGETS: RunTarget[] = ["Editor", "GameLauncher"];
+export const COMPILERS: Compiler[] = ["MSVC", "Clang"];
 
 const KEY_GENERATOR = "o3de.build.generator";
+const KEY_COMPILER = "o3de.build.compiler";
 const KEY_CONFIG = "o3de.build.config";
 const KEY_TARGETS = "o3de.build.targets";
 const KEY_RUN_TARGET = "o3de.run.target";
@@ -31,6 +34,11 @@ export class BuildOptions {
 
   get generator(): Generator {
     return this.state.get<Generator>(KEY_GENERATOR) ?? "Ninja Multi-Config";
+  }
+
+  /** C++ compiler: MSVC (platform default) or Clang (clang-cl under VS, clang under Ninja). */
+  get compiler(): Compiler {
+    return this.state.get<Compiler>(KEY_COMPILER) ?? "MSVC";
   }
 
   get config(): BuildConfig {
@@ -55,6 +63,11 @@ export class BuildOptions {
 
   async setGenerator(value: Generator): Promise<void> {
     await this.state.update(KEY_GENERATOR, value);
+    this.changed.fire();
+  }
+
+  async setCompiler(value: Compiler): Promise<void> {
+    await this.state.update(KEY_COMPILER, value);
     this.changed.fire();
   }
 

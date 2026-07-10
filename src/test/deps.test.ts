@@ -120,12 +120,12 @@ suite("Onboarding deps — blocking + next step", () => {
 
   test("rampProgress counts required satisfied/total per platform", () => {
     const results = allOk();
-    // Windows full package: base(2) + cpp(7: sourceEngine,visualStudio,windowsSdk,cmake,ninja,thirdParty,cpptools) + lua(1: sumneko).
+    // Windows full package: base(2) + cpp(8: sourceEngine,workspaceSettings,visualStudio,windowsSdk,cmake,ninja,thirdParty,cpptools) + lua(1: sumneko).
     const win = rampProgress(results, intents("cpp", "lua"), WIN);
-    assert.strictEqual(win.total, 10);
-    assert.strictEqual(win.done, 10);
-    // Linux swaps visualStudio+windowsSdk (2) for gcc (1): base(2)+cpp(6)+lua(1) = 9.
-    assert.strictEqual(rampProgress(results, intents("cpp", "lua"), LINUX).total, 9);
+    assert.strictEqual(win.total, 11);
+    assert.strictEqual(win.done, 11);
+    // Linux swaps visualStudio+windowsSdk (2) for gcc (1): base(2)+cpp(7)+lua(1) = 10.
+    assert.strictEqual(rampProgress(results, intents("cpp", "lua"), LINUX).total, 10);
     results["ninja"] = { state: "missing" };
     assert.strictEqual(rampProgress(results, intents("cpp"), WIN).done, rampProgress(allOk(), intents("cpp"), WIN).done - 1);
   });

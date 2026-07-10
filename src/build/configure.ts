@@ -19,6 +19,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { log } from "../log";
+import { freshTerminal } from "./terminals";
 import { ensureVisualStudio } from "../env/visualStudioGuard";
 import { ensureNinja } from "./ninjaGuard";
 import { captureMsvcEnvironmentDelta } from "../env/msvcEnvironment";
@@ -143,6 +144,7 @@ export async function configureProject(options: BuildOptions): Promise<void> {
       buildDir,
       generator: options.generator,
       thirdPartyPath,
+      compiler: options.compiler,
     }),
   );
 
@@ -161,7 +163,7 @@ export async function configureProject(options: BuildOptions): Promise<void> {
 
   log().info(`Configuring ${project.projectName} → ${buildDir}`);
   log().info(`  ${command}`);
-  const terminal = vscode.window.createTerminal({ name: "O3DE Configure", env });
+  const terminal = freshTerminal("O3DE Configure", env);
   terminal.show();
   terminal.sendText(command);
 }

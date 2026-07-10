@@ -37,6 +37,21 @@ async function killProcess(imageName: string): Promise<void> {
   }
 }
 
+// ---- Detection (non-interactive) -------------------------------------------
+/** The guarded processes (Editor/ScriptCanvas) currently running. Empty on non-Windows. */
+export async function runningGuardedProcesses(): Promise<string[]> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+  const running: string[] = [];
+  for (const image of GUARDED_PROCESSES) {
+    if (await isRunning(image)) {
+      running.push(image);
+    }
+  }
+  return running;
+}
+
 // ---- Guard -----------------------------------------------------------------
 /** Returns true to proceed with the build, false to cancel. Non-Windows always proceeds. */
 export async function guardEditorProcesses(): Promise<boolean> {
@@ -44,12 +59,7 @@ export async function guardEditorProcesses(): Promise<boolean> {
     return true;
   }
 
-  const running: string[] = [];
-  for (const image of GUARDED_PROCESSES) {
-    if (await isRunning(image)) {
-      running.push(image);
-    }
-  }
+  const running = await runningGuardedProcesses();
   if (running.length === 0) {
     return true;
   }

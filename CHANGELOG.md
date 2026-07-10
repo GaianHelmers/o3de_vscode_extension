@@ -3,6 +3,31 @@
 All notable changes to the **O3DE Development Tools** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.0.15] — 2026-07-09
+
+A follow-up pass resolving reported issues across build, run, Lua tooling, and onboarding.
+
+### Added
+
+- **Run in Debug (C++)** — launch the Editor / GameLauncher under VS Code's C++ debugger
+  (`cppvsdbg`) straight from the tooling window: a keybindable command plus a debug caret next
+  to **Run**. The launch is configured for you — no hand-edited `launch.json`.
+- **Compiler selection** — choose **MSVC** or **Clang**; the choice flows into the CMake
+  configure (Clang via `-T ClangCl` on the VS generator, or the Clang compiler flags on Ninja).
+- **Class Creation Wizard** — launch the engine-side `Tools/ClassCreationWizard` PySide tool
+  from the dashboard, wired to the active engine and project.
+- **Lua Palette search** — filter the Classes / EBuses / Globals tree by name; matching
+  containers auto-expand, and a clear-filter action resets it.
+
+### Changed
+
+- **Write Workspace Settings** — the former *Write Project Config* action is renamed and now
+  treated as a required setup step (writes `.vscode/settings.json` CMake keys).
+- Build and Configure reuse their named terminals instead of stacking new ones on every run.
+- `.lua` files no longer surface C++ word-based suggestions — completion is LuaLS-only.
+- The reflection-dump / RemoteTools status refreshes on panel focus and after a dump, with a
+  manual **Re-scan** button, so it no longer shows stale results.
+
 ## [0.0.14] — 2026-07-09
 
 The first Marketplace update since 0.0.2 — a major feature drop that adds full **Lua

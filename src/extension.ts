@@ -23,21 +23,26 @@ import { configureProject } from "./build/configure";
 import { buildProject } from "./build/build";
 import { selectTargets } from "./build/selectTargets";
 import { runProject, stopRun } from "./build/run";
+import { runInDebug } from "./build/runDebug";
 import { RunState } from "./build/runState";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
 import { registerConfigurationProvider } from "./intellisense/provider";
 import { registerLuaDebug, debugLuaFile } from "./lua/debug/debugAdapter";
 import { registerLuaHandoff } from "./lua/handoff";
 import { generateLuaIntelliSense, generateLuaStubsFromDump } from "./lua/intellisense/intelliSense";
+import { launchClassWizard } from "./tools/classWizard";
 import { LuaPaletteProvider, LUA_PALETTE_VIEW_ID, insertLuaSymbol } from "./lua/palette/luaPaletteProvider";
 import { DependencyStatus } from "./deps/dependencyStatus";
+import { O3deMcpServer } from "./mcp/server";
 import {
   BuildOptions,
   GENERATORS,
   BUILD_CONFIGS,
+  COMPILERS,
   RUN_TARGETS,
   Generator,
   BuildConfig,
+  Compiler,
   RunTarget,
 } from "./build/buildOptions";
 
@@ -66,6 +71,57 @@ export function activate(context: vscode.ExtensionContext): void {
   // Live run state (Editor / GameLauncher up?) — toggles the toolbar's single
   // Run slot between Play and Stop via the `o3de.appRunning` context key.
   const runState = new RunState();
+
+  // LLM connections — a localhost MCP endpoint an assistant (e.g. Claude) uses to
+  // trigger builds and read structured results. Off by default; the MCP SDK is
+  // only loaded when started. Toggled from the Onboarding ▸ Optional section.
+  const mcpServer = new O3deMcpServer(context, buildOptions);
+  const reconcileMcp = async (): Promise<void> => {
+    if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
+      await mcpServer.restart(); // idempotent start + picks up a changed port
+    } else {
+      await mcpServer.stop();
+    }
+    void deps.refresh(); // refresh the Optional row's dot/detail
+  };
+  if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
+    void mcpServer.start();
+  }
+  const mcpConfigListener = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("o3de.llm.enabled") || e.affectsConfiguration("o3de.llm.port")) {
+      void reconcileMcp();
+    }
+  });
+
+  // Commands: enable / disable the LLM endpoint + show the client connection info.
+  const llmEnable = vscode.commands.registerCommand("o3de.llm.enable", async () => {
+    await vscode.workspace.getConfiguration("o3de").update("llm.enabled", true, vscode.ConfigurationTarget.Global);
+    void vscode.commands.executeCommand("o3de.llm.showConnectionInfo");
+  });
+  const llmDisable = vscode.commands.registerCommand("o3de.llm.disable", async () => {
+    await vscode.workspace.getConfiguration("o3de").update("llm.enabled", false, vscode.ConfigurationTarget.Global);
+  });
+  const llmShowInfo = vscode.commands.registerCommand("o3de.llm.showConnectionInfo", async () => {
+    if (!vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
+      void vscode.window.showInformationMessage(
+        "O3DE: LLM connections are off. Enable them from Onboarding ▸ Optional (or “O3DE: Enable LLM Connections”).",
+      );
+      return;
+    }
+    const info = mcpServer.connectionInfo();
+    log().info(`LLM (MCP) connection — add to your MCP client (e.g. .mcp.json):\n${info.mcpJson}`);
+    log().show(true);
+    const pick = await vscode.window.showInformationMessage(
+      `O3DE LLM endpoint: ${info.url}`,
+      "Copy .mcp.json",
+      "Copy Token",
+    );
+    if (pick === "Copy .mcp.json") {
+      await vscode.env.clipboard.writeText(info.mcpJson);
+    } else if (pick === "Copy Token") {
+      await vscode.env.clipboard.writeText(info.token);
+    }
+  });
 
   // Command: "O3DE: Hello World".
   const helloWorld = vscode.commands.registerCommand("o3de.helloWorld", () => {
@@ -134,6 +190,11 @@ export function activate(context: vscode.ExtensionContext): void {
     void runState.refresh(); // flip the toolbar to Stop immediately
   });
 
+  // Command: "O3DE: Run in Debug (C++)" — launch the selected target under cppvsdbg.
+  const runDebug = vscode.commands.registerCommand("o3de.runDebug", () => {
+    void runInDebug(buildOptions);
+  });
+
   // Command: "O3DE: Stop" — force-quit the running app + its process tree (or sweep orphans).
   const stop = vscode.commands.registerCommand("o3de.stopRun", async () => {
     await stopRun();
@@ -141,6 +202,10 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Command: "O3DE: Generate C++ IntelliSense" — File API reply → <project>/.vscode/c_cpp_properties.json.
+  const classWizard = vscode.commands.registerCommand("o3de.classWizard", () => {
+    void launchClassWizard();
+  });
+
   const genCpp = vscode.commands.registerCommand("o3de.generateCppProperties", () => {
     void generateCppProperties(buildOptions);
   });
@@ -162,6 +227,15 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     if (pick) {
       await buildOptions.setConfig(pick as BuildConfig);
+    }
+  });
+  const selectCompiler = vscode.commands.registerCommand("o3de.selectCompiler", async () => {
+    const pick = await vscode.window.showQuickPick(COMPILERS, {
+      title: "O3DE: Compiler",
+      placeHolder: `Current: ${buildOptions.compiler} — switching may need a fresh Configure`,
+    });
+    if (pick) {
+      await buildOptions.setCompiler(pick as Compiler);
     }
   });
 
@@ -243,16 +317,35 @@ export function activate(context: vscode.ExtensionContext): void {
   const luaPaletteInsert = vscode.commands.registerCommand("o3de.luaPalette.insert", (text: string) =>
     insertLuaSymbol(text),
   );
+  const applyPaletteFilter = (text: string): void => {
+    luaPalette.setFilter(text);
+    void vscode.commands.executeCommand("setContext", "o3de.luaPaletteFiltering", luaPalette.isFiltering);
+  };
+  const luaPaletteFilter = vscode.commands.registerCommand("o3de.luaPalette.filter", async () => {
+    const text = await vscode.window.showInputBox({
+      prompt: "Filter the Lua palette (class / method / EBus / global name)",
+      placeHolder: "e.g. TransformBus, Vector3, GetWorld…",
+      value: "",
+    });
+    if (text !== undefined) {
+      applyPaletteFilter(text);
+    }
+  });
+  const luaPaletteClearFilter = vscode.commands.registerCommand("o3de.luaPalette.clearFilter", () =>
+    applyPaletteFilter(""),
+  );
 
   // Lua IntelliSense: dump the reflected API (headless Editor) → LuaLS stubs.
   // Refresh the palette afterwards so it populates from the fresh dump.
   const genLuaIntelliSense = vscode.commands.registerCommand("o3de.generateLuaIntelliSense", async () => {
     await generateLuaIntelliSense(context, buildOptions);
     luaPalette.refresh();
+    void deps.refresh(); // the reflection-dump check should now read green
   });
   const genLuaStubsFromDump = vscode.commands.registerCommand("o3de.generateLuaStubsFromDump", async () => {
     await generateLuaStubsFromDump();
     luaPalette.refresh();
+    void deps.refresh();
   });
 
   context.subscriptions.push(
@@ -260,6 +353,11 @@ export function activate(context: vscode.ExtensionContext): void {
     onboarding,
     deps,
     runState,
+    mcpServer,
+    mcpConfigListener,
+    llmEnable,
+    llmDisable,
+    llmShowInfo,
     foldersChanged,
     helloWorld,
     showLog,
@@ -272,10 +370,13 @@ export function activate(context: vscode.ExtensionContext): void {
     configure,
     build,
     run,
+    runDebug,
     stop,
     genCpp,
     selectGenerator,
     selectConfig,
+    selectCompiler,
+    classWizard,
     selectTargetsCmd,
     selectRunTarget,
     setLaunchArgs,
@@ -287,6 +388,8 @@ export function activate(context: vscode.ExtensionContext): void {
     luaPaletteView,
     luaPaletteRefresh,
     luaPaletteInsert,
+    luaPaletteFilter,
+    luaPaletteClearFilter,
     dashboardView,
     statusItem,
   );

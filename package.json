@@ -2,7 +2,7 @@
   "name": "o3de-development-tools",
   "displayName": "O3DE Development Tools",
   "description": "Developer companion for Open 3D Engine (O3DE): guided workspace setup, one-click CMake build & run, and C++ IntelliSense — for VS Code on Windows.",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "icon": "media/icon.png",
   "publisher": "GenomeStudiosInc",
   "license": "MIT",
@@ -30,6 +30,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "On activation, regenerate C++ IntelliSense (`c_cpp_properties.json`) from the latest CMake File API reply. Low cost — re-parses the existing reply, does **not** run a CMake configure. Turn off to update only via the **O3DE: Generate C++ IntelliSense** command."
+        },
+        "o3de.llm.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**Allow LLM connections.** Expose a local [MCP](https://modelcontextprotocol.io) endpoint on `127.0.0.1` so an assistant like Claude can trigger builds and read back structured results — no rebuilt scripts. **Off by default**; the endpoint binds to localhost and requires a bearer token. Run **O3DE: Show LLM Connection Info** for the client config. Toggle from the Onboarding ▸ Optional section."
+        },
+        "o3de.llm.port": {
+          "type": "number",
+          "default": 8975,
+          "markdownDescription": "TCP port for the local LLM (MCP) endpoint on `127.0.0.1`. Only used when `#o3de.llm.enabled#` is on. If the port is busy, the extension falls back to a free one and the actual URL is shown by **O3DE: Show LLM Connection Info**."
         }
       }
     },
@@ -37,7 +47,7 @@
       "activitybar": [
         {
           "id": "o3de",
-          "title": "O3DE Development Tools 0.0.14",
+          "title": "O3DE Development Tools 0.0.15",
           "icon": "media/o3de.svg"
         }
       ]
@@ -101,7 +111,7 @@
       },
       {
         "command": "o3de.writeProjectConfig",
-        "title": "O3DE: Write Project Config"
+        "title": "O3DE: Write Workspace Settings"
       },
       {
         "command": "o3de.configureProject",
@@ -120,6 +130,11 @@
         "command": "o3de.run",
         "title": "O3DE: Run",
         "icon": "$(play)"
+      },
+      {
+        "command": "o3de.runDebug",
+        "title": "O3DE: Run in Debug (C++)",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "o3de.stopRun",
@@ -147,6 +162,15 @@
         "title": "O3DE: Select Build Configuration"
       },
       {
+        "command": "o3de.selectCompiler",
+        "title": "O3DE: Select Compiler"
+      },
+      {
+        "command": "o3de.classWizard",
+        "title": "O3DE: Class Creation Wizard",
+        "icon": "$(symbol-class)"
+      },
+      {
         "command": "o3de.registerAsLuaEditor",
         "title": "O3DE: Register VS Code as Lua Editor"
       },
@@ -172,6 +196,28 @@
         "command": "o3de.luaPalette.refresh",
         "title": "O3DE: Refresh Lua Palette",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "o3de.luaPalette.filter",
+        "title": "O3DE: Filter Lua Palette",
+        "icon": "$(search)"
+      },
+      {
+        "command": "o3de.luaPalette.clearFilter",
+        "title": "O3DE: Clear Lua Palette Filter",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "o3de.llm.enable",
+        "title": "O3DE: Enable LLM Connections"
+      },
+      {
+        "command": "o3de.llm.disable",
+        "title": "O3DE: Disable LLM Connections"
+      },
+      {
+        "command": "o3de.llm.showConnectionInfo",
+        "title": "O3DE: Show LLM Connection Info"
       }
     ],
     "breakpoints": [
@@ -252,9 +298,19 @@
       ],
       "view/title": [
         {
+          "command": "o3de.luaPalette.filter",
+          "when": "view == o3de.luaPalette",
+          "group": "navigation@1"
+        },
+        {
+          "command": "o3de.luaPalette.clearFilter",
+          "when": "view == o3de.luaPalette && o3de.luaPaletteFiltering",
+          "group": "navigation@2"
+        },
+        {
           "command": "o3de.luaPalette.refresh",
           "when": "view == o3de.luaPalette",
-          "group": "navigation"
+          "group": "navigation@3"
         }
       ]
     }
@@ -273,10 +329,12 @@
     "test": "vscode-test"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/debugadapter": "^1.68.0",
     "@vscode/debugprotocol": "^1.68.0",
     "jsonc-parser": "^3.3.1",
-    "vscode-cpptools": "^7.1.1"
+    "vscode-cpptools": "^7.1.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",

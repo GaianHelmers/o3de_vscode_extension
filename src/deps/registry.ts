@@ -71,7 +71,6 @@ export const CHECKS: DependencyCheck[] = [
     detect: d.detectProject,
     action: { label: "Set Up Workspace…", kind: "command", payload: "o3de.setupWorkspace" },
   },
-
   // CPP — browse engine code, C++ IntelliSense, and the live build (component dev).
   {
     id: "sourceEngine",
@@ -82,6 +81,16 @@ export const CHECKS: DependencyCheck[] = [
     track: "cpp",
     detect: d.detectSourceEngine,
     action: { label: "Set Up Workspace…", kind: "command", payload: "o3de.setupWorkspace" },
+  },
+  {
+    id: "workspaceSettings",
+    label: "Workspace settings",
+    what: "This extension's .vscode/settings.json (CMake source/build wiring) — needed to configure and build the project.",
+    category: "engine",
+    tier: "required",
+    track: "cpp",
+    detect: d.detectWorkspaceSettings,
+    action: { label: "Write Workspace Settings", kind: "command", payload: "o3de.writeProjectConfig" },
   },
   {
     id: "visualStudio",
@@ -273,6 +282,19 @@ export const CHECKS: DependencyCheck[] = [
     track: "optional",
     detect: d.detectPerforce,
     docUrl: "https://www.perforce.com/downloads/helix-command-line-client-p4",
+  },
+  {
+    id: "llmConnections",
+    label: "LLM connections (MCP)",
+    what:
+      "Expose a local MCP endpoint on 127.0.0.1 so an assistant like Claude can trigger builds and read " +
+      "structured results — no rebuilt scripts. Off by default; localhost-bound and bearer-token gated. " +
+      "Run “O3DE: Show LLM Connection Info” for the client config.",
+    category: "system",
+    tier: "optional",
+    track: "optional",
+    detect: d.detectLlmConnections,
+    action: { label: "Enable LLM connections", kind: "command", payload: "o3de.llm.enable" },
   },
 ];
 

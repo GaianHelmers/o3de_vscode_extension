@@ -39,9 +39,32 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
     this.load();
   }
 
+  private filter = "";
+
   refresh(): void {
     this.load();
     this.changed.fire();
+  }
+
+  /** Filter the tree to entries whose name matches (case-insensitive). Empty clears it. */
+  setFilter(text: string): void {
+    this.filter = text.trim().toLowerCase();
+    this.changed.fire();
+  }
+
+  get isFiltering(): boolean {
+    return this.filter !== "";
+  }
+
+  private matches(name: string): boolean {
+    return this.filter === "" || name.toLowerCase().includes(this.filter);
+  }
+
+  // When a filter is active, auto-expand containers so matches are visible without clicking.
+  private collapseState(): vscode.TreeItemCollapsibleState {
+    return this.isFiltering
+      ? vscode.TreeItemCollapsibleState.Expanded
+      : vscode.TreeItemCollapsibleState.Collapsed;
   }
 
   // Load user/lua_symbols.json from the detected project, if present.
@@ -72,18 +95,18 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
         return item;
       }
       case "category": {
-        const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Collapsed);
+        const item = new vscode.TreeItem(node.label, this.collapseState());
         item.iconPath = new vscode.ThemeIcon("symbol-namespace");
         item.contextValue = "o3deLuaCategory";
         return item;
       }
       case "class": {
-        const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Collapsed);
+        const item = new vscode.TreeItem(node.name, this.collapseState());
         item.iconPath = new vscode.ThemeIcon("symbol-class");
         return item;
       }
       case "ebus": {
-        const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Collapsed);
+        const item = new vscode.TreeItem(node.name, this.collapseState());
         item.iconPath = new vscode.ThemeIcon("symbol-event");
         return item;
       }
@@ -134,23 +157,45 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
         },
       ];
     }
-    return [
-      { kind: "category", label: `Classes (${this.dump.classes.length})`, category: "classes" },
-      { kind: "category", label: `EBuses (${this.dump.ebuses.length})`, category: "ebuses" },
-      {
-        kind: "category",
-        label: `Globals (${this.dump.globalFunctions.length + this.dump.globalProperties.length})`,
-        category: "globals",
-      },
+    // Counts reflect the active filter; when filtering, hide categories with no hits.
+    const classCount = this.classNodes().length;
+    const ebusCount = this.ebusNodes().length;
+    const globalCount = this.globalNodes().length;
+
+    const cats: Node[] = [
+      { kind: "category", label: `Classes (${classCount})`, category: "classes" },
+      { kind: "category", label: `EBuses (${ebusCount})`, category: "ebuses" },
+      { kind: "category", label: `Globals (${globalCount})`, category: "globals" },
     ];
+    if (!this.isFiltering) {
+      return cats;
+    }
+    const counts = [classCount, ebusCount, globalCount];
+    const shown = cats.filter((_, i) => counts[i] > 0);
+    if (shown.length === 0) {
+      return [
+        {
+          kind: "message",
+          label: `No API symbols match "${this.filter}"`,
+          command: { command: "o3de.luaPalette.clearFilter", title: "Clear Filter" },
+        },
+      ];
+    }
+    return shown;
   }
 
   private classNodes(): Node[] {
-    return sortByName(this.dump?.classes ?? []).map((c) => ({ kind: "class", name: c.name }));
+    const classes = (this.dump?.classes ?? []).filter(
+      (c) => this.matches(c.name) || c.methods.some((m) => this.matches(m.name)) || c.properties.some((p) => this.matches(p.name)),
+    );
+    return sortByName(classes).map((c) => ({ kind: "class", name: c.name }));
   }
 
   private ebusNodes(): Node[] {
-    return sortByName(this.dump?.ebuses ?? []).map((b) => ({ kind: "ebus", name: b.name }));
+    const buses = (this.dump?.ebuses ?? []).filter(
+      (b) => this.matches(b.name) || b.senders.some((s) => this.matches(s.name)),
+    );
+    return sortByName(buses).map((b) => ({ kind: "ebus", name: b.name }));
   }
 
   private classMembers(className: string): Node[] {
@@ -158,7 +203,9 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
     if (!cls) {
       return [];
     }
-    const methods = sortByName(cls.methods).map<Node>((m) => {
+    // If the class itself matched, show all members; otherwise only matching ones.
+    const keep = (name: string): boolean => this.matches(className) || this.matches(name);
+    const methods = sortByName(cls.methods.filter((m) => keep(m.name))).map<Node>((m) => {
       const sig = signatureText(m.debugArgumentInfo);
       return {
         kind: "member",
@@ -169,7 +216,7 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
         icon: "symbol-method",
       };
     });
-    const properties = sortByName(cls.properties).map<Node>((p) => ({
+    const properties = sortByName(cls.properties.filter((p) => keep(p.name))).map<Node>((p) => ({
       kind: "member",
       label: p.name,
       detail: p.canWrite ? "" : "read-only",
@@ -185,7 +232,8 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
     if (!bus) {
       return [];
     }
-    return sortByName(bus.senders).map<Node>((s) => {
+    const keep = (name: string): boolean => this.matches(busName) || this.matches(name);
+    return sortByName(bus.senders.filter((s) => keep(s.name))).map<Node>((s) => {
       const sig = signatureText(s.debugArgumentInfo);
       const table = s.category === "Event" ? "Event" : s.category === "Broadcast" ? "Broadcast" : "Notification";
       const insert =
@@ -206,7 +254,7 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
   }
 
   private globalNodes(): Node[] {
-    const fns = sortByName(this.dump?.globalFunctions ?? []).map<Node>((f) => {
+    const fns = sortByName((this.dump?.globalFunctions ?? []).filter((f) => this.matches(f.name))).map<Node>((f) => {
       const sig = signatureText(f.debugArgumentInfo);
       return {
         kind: "member",
@@ -217,7 +265,7 @@ export class LuaPaletteProvider implements vscode.TreeDataProvider<Node> {
         icon: "symbol-function",
       };
     });
-    const props = sortByName(this.dump?.globalProperties ?? []).map<Node>((p) => ({
+    const props = sortByName((this.dump?.globalProperties ?? []).filter((p) => this.matches(p.name))).map<Node>((p) => ({
       kind: "member",
       label: p.name,
       detail: p.canWrite ? "" : "read-only",

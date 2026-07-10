@@ -61,15 +61,20 @@ async function mergeLuaSettings(settingsPath: string, stubDir: string): Promise<
     : [];
   const library = existingLibrary.includes(libEntry) ? existingLibrary : [...existingLibrary, libEntry];
 
-  const edits: [string, unknown][] = [
-    ["Lua.runtime.version", "Lua 5.4"],
-    ["Lua.workspace.library", library],
-    ["Lua.workspace.checkThirdParty", false],
+  // Nested JSON pointer paths so we don't clobber sibling settings. The [lua]
+  // scope turns OFF word-based suggestions in .lua files, so completions come
+  // only from the Lua language server — no C++ symbols (e.g. AZ_Printf) leaking
+  // in from open engine source files.
+  const edits: [string[], unknown][] = [
+    [["Lua.runtime.version"], "Lua 5.4"],
+    [["Lua.workspace.library"], library],
+    [["Lua.workspace.checkThirdParty"], false],
+    [["[lua]", "editor.wordBasedSuggestions"], "off"],
   ];
 
   const formatting = { insertSpaces: true, tabSize: 2 };
-  for (const [key, value] of edits) {
-    text = applyEdits(text, modify(text, [key], value, { formattingOptions: formatting }));
+  for (const [pointer, value] of edits) {
+    text = applyEdits(text, modify(text, pointer, value, { formattingOptions: formatting }));
   }
 
   await fs.writeFile(settingsPath, text, "utf8");

@@ -32,6 +32,7 @@ import { runGuidedAction } from "../deps/actions";
 const COMMANDS: Record<string, string> = {
   build: "o3de.build",
   run: "o3de.run",
+  runDebug: "o3de.runDebug",
   stop: "o3de.stopRun",
   terminal: "o3de.openDeveloperTerminal",
   log: "o3de.showLog",
@@ -43,10 +44,12 @@ const COMMANDS: Record<string, string> = {
   addGems: "o3de.addGems",
   selectGenerator: "o3de.selectGenerator",
   selectConfig: "o3de.selectConfig",
+  selectCompiler: "o3de.selectCompiler",
   selectTargets: "o3de.selectTargets",
   writeProjectConfig: "o3de.writeProjectConfig",
   configureProject: "o3de.configureProject",
   generateCppProperties: "o3de.generateCppProperties",
+  classWizard: "o3de.classWizard",
   selectRunTarget: "o3de.selectRunTarget",
   setLaunchArgs: "o3de.setLaunchArgs",
   // Lua
@@ -97,6 +100,7 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
         title: "Build Options",
         rows: [
           { label: "Generator", value: options.generator, cmd: "selectGenerator" },
+          { label: "Compiler", value: options.compiler, cmd: "selectCompiler" },
           { label: "Config", value: options.config, cmd: "selectConfig" },
           { label: "Targets", value: targetsLabel(options.targets), cmd: "selectTargets" },
         ],
@@ -104,9 +108,10 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
       {
         title: "Project Setup",
         rows: [
-          { label: "Write Project Config", cmd: "writeProjectConfig" },
+          { label: "Write Workspace Settings", cmd: "writeProjectConfig" },
           { label: "Configure Project", cmd: "configureProject" },
           { label: "Generate C++ IntelliSense", cmd: "generateCppProperties" },
+          { label: "Class Creation Wizard", cmd: "classWizard" },
         ],
       },
       {
@@ -150,7 +155,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     webview.options = { enableScripts: true };
     webview.html = this.html(webview);
 
-    webview.onDidReceiveMessage((msg: { command?: string; view?: View; action?: string }) => {
+    webview.onDidReceiveMessage((msg: { command?: string; view?: View; action?: string; rescan?: boolean }) => {
       if (msg.command) {
         const command = COMMANDS[msg.command];
         if (command) {
@@ -160,6 +165,10 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       }
       if (msg.view) {
         void this.deps.setView(msg.view);
+        return;
+      }
+      if (msg.rescan) {
+        void this.deps.refresh(); // re-detect (e.g. after enabling a gem or generating externally)
         return;
       }
       if (msg.action) {
@@ -186,7 +195,15 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         postStatus(); // the header C++/Lua readouts derive from deps
         postDeps();
       }),
+      // Re-detect whenever the panel is revealed — catches changes made outside
+      // the extension (enabling a gem, generating a dump via the live Editor).
+      webviewView.onDidChangeVisibility(() => {
+        if (webviewView.visible) {
+          void this.deps.refresh();
+        }
+      }),
     );
+    void this.deps.refresh(); // fresh scan each time the view resolves
     webviewView.onDidDispose(() => this.disposeSubs());
   }
 
@@ -325,8 +342,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .intent.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border-color: transparent; }
     .intent:hover { background: var(--vscode-list-hoverBackground); }
     .intent.on:hover { background: var(--vscode-button-hoverBackground); }
+    .markerrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 8px; }
     .viewmarker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--vscode-descriptionForeground); opacity: 0.7; padding: 0 4px 8px; }
+      color: var(--vscode-descriptionForeground); opacity: 0.7; }
 
     .reports { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 8px; }
     .rep { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 8px; border-radius: 11px;
@@ -375,6 +393,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       <div class="row">
         <button id="build" class="primary" title="Build the selected target(s) with the current config">${TOOLS_SVG}<span>Build</span></button>
         <button id="run" class="primary" title="Launch the selected run target"><span>▶ Run</span></button>
+        <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">🐞</button>
       </div>
     </div>
 
@@ -415,6 +434,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     function send(command) { vscode.postMessage({ command }); }
     function sendView(view) { vscode.postMessage({ view }); }
     function sendAction(id) { vscode.postMessage({ action: id }); }
+    function sendRescan() { vscode.postMessage({ rescan: true }); }
 
     // ---- Collapsible sections (state persisted) ----
     function initCollapse() {
@@ -536,9 +556,15 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       seg.appendChild(mk('lua', 'Lua setup'));
       depsEl.appendChild(seg);
 
-      const marker = document.createElement('div'); marker.className = 'viewmarker';
+      const markerRow = document.createElement('div'); markerRow.className = 'markerrow';
+      const marker = document.createElement('span'); marker.className = 'viewmarker';
       marker.textContent = 'Showing ' + (model.view === 'cpp' ? 'C++' : 'Lua') + ' tools';
-      depsEl.appendChild(marker);
+      markerRow.appendChild(marker);
+      const rescan = document.createElement('button'); rescan.className = 'fixbtn small'; rescan.textContent = '↻ Re-scan';
+      rescan.title = 'Re-detect dependencies (e.g. after enabling a gem or generating a dump)';
+      rescan.onclick = sendRescan;
+      markerRow.appendChild(rescan);
+      depsEl.appendChild(markerRow);
 
       // Sub-reports (always both tracks): base / C++ / Lua ready + optionals count.
       const reports = document.createElement('div'); reports.className = 'reports';
@@ -587,6 +613,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     // ---- Wire static buttons ----
     buildBtn.onclick = () => { if (!buildBtn.disabled) { send('build'); } };
     runBtn.onclick = () => { if (!runBtn.disabled) { send(runBtn.dataset.cmd === 'stop' ? 'stop' : 'run'); } };
+    document.getElementById('runDebug').onclick = () => send('runDebug');
     document.getElementById('terminal').onclick = () => send('terminal');
     document.getElementById('log').onclick = () => send('log');
     document.getElementById('editorLog').onclick = () => send('editorLog');

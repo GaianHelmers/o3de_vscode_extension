@@ -29,6 +29,8 @@ const fallback = {
   info: (...a: unknown[]) => console.info(...a),
   warn: (...a: unknown[]) => console.warn(...a),
   error: (...a: unknown[]) => console.error(...a),
+  append: (value: string) => process.stdout.write(value),
+  appendLine: (value: string) => console.log(value),
   show: () => undefined,
 } as unknown as vscode.LogOutputChannel;
 

@@ -11,6 +11,7 @@
 
 import * as vscode from "vscode";
 import { log } from "../log";
+import { freshTerminal } from "./terminals";
 import { ensureVisualStudio } from "../env/visualStudioGuard";
 import { captureMsvcEnvironmentDelta } from "../env/msvcEnvironment";
 import { BuildOptions } from "./buildOptions";
@@ -82,7 +83,7 @@ export async function buildProject(options: BuildOptions): Promise<void> {
     `Building ${project.projectName} — targets=[${targetsLabel(options.targets)}], config=${options.config}`,
   );
   log().info(`  ${command}`);
-  const terminal = vscode.window.createTerminal({ name: "O3DE Build", env });
+  const terminal = freshTerminal("O3DE Build", env);
   terminal.show();
   terminal.sendText(command);
 }

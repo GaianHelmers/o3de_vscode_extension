@@ -132,6 +132,26 @@ export function detectThirdParty(): CheckResult {
   return fs.existsSync(folder) ? { state: "ok", detail: folder } : { state: "warn", detail: `${folder} (missing)` };
 }
 
+// Whether this extension's .vscode/settings.json (CMake + C++ wiring) is written.
+export function detectWorkspaceSettings(): CheckResult {
+  const folder = (vscode.workspace.workspaceFolders ?? []).find((f) => readProject(f.uri.fsPath));
+  if (!folder) {
+    return { state: "unknown" };
+  }
+  const settings = path.join(folder.uri.fsPath, ".vscode", "settings.json");
+  try {
+    if (!fs.existsSync(settings)) {
+      return { state: "missing" };
+    }
+    const text = fs.readFileSync(settings, "utf8");
+    return /"cmake\.(generator|sourceDirectory|configureSettings)"/.test(text)
+      ? { state: "ok" }
+      : { state: "missing" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
 export function detectGit(): Promise<CheckResult> {
   return probe("git", ["--version"], /git version ([\d.]+)/i);
 }
@@ -203,4 +223,14 @@ export async function detectFfmpeg(): Promise<CheckResult> {
 export async function detectPerforce(): Promise<CheckResult> {
   const r = await probe("p4", ["-V"], /Rev\.\s*\S+\/([\d.]+)/i);
   return r.state === "ok" ? r : { state: "absent" };
+}
+
+// LLM connections (local MCP endpoint) — a setting toggle, not an installable
+// tool. "ok" when on (with the port as detail), "absent" (grey) when off.
+export function detectLlmConnections(): CheckResult {
+  const cfg = vscode.workspace.getConfiguration("o3de");
+  if (!cfg.get<boolean>("llm.enabled", false)) {
+    return { state: "absent" };
+  }
+  return { state: "ok", detail: `on · port ${cfg.get<number>("llm.port", 8975)}` };
 }

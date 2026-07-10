@@ -50,11 +50,18 @@ export interface ConfigureInputs {
   buildDir: string;
   generator: string; // "Ninja Multi-Config" | "Visual Studio 17 2022"
   thirdPartyPath: string; // LY_3RDPARTY_PATH
+  compiler?: "MSVC" | "Clang"; // default MSVC
 }
 
-/** The argv for the O3DE configure: cmake -G <gen> -S <project> -B <build> -DLY_3RDPARTY_PATH=<3rd>. */
+/**
+ * The argv for the O3DE configure: cmake -G <gen> -S <project> -B <build>
+ * -DLY_3RDPARTY_PATH=<3rd>, plus the compiler selection. Clang maps to O3DE's
+ * two supported paths (matching its CMakePresets):
+ *   - VS generator  → -T ClangCl  (the clang-cl toolset that ships with VS)
+ *   - Ninja         → -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+ */
 export function buildConfigureArgs(inputs: ConfigureInputs): string[] {
-  return [
+  const args = [
     "cmake",
     "-G",
     inputs.generator,
@@ -64,6 +71,15 @@ export function buildConfigureArgs(inputs: ConfigureInputs): string[] {
     inputs.buildDir,
     `-DLY_3RDPARTY_PATH=${inputs.thirdPartyPath}`,
   ];
+
+  if (inputs.compiler === "Clang") {
+    if (inputs.generator.startsWith("Visual Studio")) {
+      args.push("-T", "ClangCl");
+    } else {
+      args.push("-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++");
+    }
+  }
+  return args;
 }
 
 /** Join argv into a shell line, double-quoting tokens with spaces, `=`, or path chars. */
