@@ -21,6 +21,7 @@ import { editorExeCandidates } from "../../build/runCommand";
 import { cleanChildEnv } from "../../build/runManager";
 import { O3deProject } from "../../o3de/identity";
 import { parseReflectionDump, ReflectionDump } from "./symbols";
+import { loadSymbolCategories, isEmptyCategories } from "./categories";
 import { generateStubs } from "./stubGenerator";
 import { applyLuaIntelliSense } from "./luaLsConfig";
 import { scrapeReflectionFromEditor } from "./liveScrape";
@@ -58,12 +59,12 @@ export async function generateLuaIntelliSense(
   const items: (vscode.QuickPickItem & { source: Source })[] = [
     {
       label: "$(plug) From the running Editor",
-      detail: "Fast — scrape the reflected API from a live Editor over RemoteTools (no boot). Editor must be running.",
+      detail: "Fast — scrape the reflected API from a live Editor over RemoteTools (no boot). Symbols only (no category grouping). Editor must be running.",
       source: "live",
     },
     {
       label: "$(server-process) Headless Editor scan",
-      detail: "Launch O3DE headless to scan the reflected API (first run takes a few minutes).",
+      detail: "Launch O3DE headless to scan the reflected API + category grouping (first run takes a few minutes).",
       source: "headless",
     },
   ];
@@ -88,19 +89,22 @@ export async function generateLuaIntelliSense(
     }
     return;
   }
-  // Live scrape from a running Editor, with a headless fallback offer.
+  // Live scrape from a running Editor, falling back to a headless scan or — if a
+  // dump already exists on disk — rebuilding from it (the "stubs from dump" path).
   const dump = await scrapeLive(project);
   if (dump) {
     await generateFromDump(project.path, dumpPath, dump);
-  } else {
-    const fallback = await vscode.window.showWarningMessage(
-      "Couldn't reach a running Editor. Run a headless scan instead?",
-      "Headless scan",
-      "Cancel",
-    );
-    if (fallback === "Headless scan" && (await runEditorDump(context, project, options.config, dumpPath))) {
-      await generateFromDumpFile(project.path, dumpPath);
-    }
+    return;
+  }
+  const options2: string[] = ["Headless scan"];
+  if (hasExisting) {
+    options2.push("Use existing dump");
+  }
+  const fallback = await vscode.window.showWarningMessage("Couldn't reach a running Editor.", ...options2);
+  if (fallback === "Headless scan" && (await runEditorDump(context, project, options.config, dumpPath))) {
+    await generateFromDumpFile(project.path, dumpPath);
+  } else if (fallback === "Use existing dump") {
+    await generateFromDumpFile(project.path, dumpPath);
   }
 }
 
@@ -168,9 +172,15 @@ async function generateFromDump(projectPath: string, dumpPath: string, dump: Ref
   const { stubPath } = await applyLuaIntelliSense(projectPath, lua);
 
   const total = dump.classes.length + dump.ebuses.length + dump.globalFunctions.length;
+  // Best-effort category dictionary (engine category-bridge PR) → the palette's
+  // nested Node Palette layout. Absent → flat view; report which the user got.
+  const cats = loadSymbolCategories(projectPath);
+  const categoryNote = isEmptyCategories(cats)
+    ? " Category grouping: not available (engine lacks the category-bridge PR, or symbols came from the live wire)."
+    : " Category grouping: on (Script Canvas Node Palette layout).";
   void vscode.window.showInformationMessage(
     `O3DE Lua IntelliSense ready: ${dump.classes.length} classes, ${dump.ebuses.length} EBuses, ` +
-      `${dump.globalFunctions.length} globals (${total} symbols). Reload if completions don't appear yet.`,
+      `${dump.globalFunctions.length} globals (${total} symbols).${categoryNote} Reload if completions don't appear yet.`,
   );
   log().info(`Generated Lua stubs at ${stubPath}.`);
 }
@@ -216,6 +226,7 @@ async function runEditorDump(
   const env: NodeJS.ProcessEnv = {
     ...cleanChildEnv(),
     O3DE_LUA_SYMBOLS_OUT: dumpPath,
+    O3DE_LUA_CATEGORIES_OUT: path.join(path.dirname(dumpPath), "lua_symbol_categories.json"),
     O3DE_PROJECT_PATH: project.path,
     O3DE_ENGINE_PATH: enginePath,
   };

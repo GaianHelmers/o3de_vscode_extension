@@ -19,40 +19,27 @@ import * as fs from "fs";
 import * as path from "path";
 import { detectProjectRoot } from "../projectPaths";
 import { parseReflectionDump, ReflectionDump } from "../intellisense/symbols";
-import { parseSignature } from "../intellisense/signature";
+import { loadSymbolCategories } from "../intellisense/categories";
 import { loadIcon } from "../../view/svgAssets";
+import {
+  PaletteMember,
+  PaletteContainer,
+  PaletteModel,
+  methodMember,
+  propertyMember,
+  senderMember,
+  globalFunctionMember,
+  globalPropertyMember,
+} from "./paletteModel";
+import { buildCategoryTree } from "./categoryTree";
 
 export const LUA_PALETTE_VIEW_ID = "o3de.luaPalette";
-
-// ---- Model handed to the webview -------------------------------------------
-
-type MemberKind = "method" | "property" | "event" | "function" | "variable";
-
-interface PaletteMember {
-  label: string;
-  detail: string; // signature / "read-only" / table name — the dim right-hand text
-  tooltip: string;
-  insert: string; // snippet inserted on click ($0 = cursor)
-  kind: MemberKind;
-}
-
-interface PaletteContainer {
-  name: string;
-  kind: "class" | "ebus";
-  members: PaletteMember[];
-}
-
-interface PaletteModel {
-  hasDump: boolean;
-  classes: PaletteContainer[];
-  ebuses: PaletteContainer[];
-  globals: PaletteMember[];
-}
 
 // ---- Provider --------------------------------------------------------------
 
 export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
   private dump: ReflectionDump | undefined;
+  private categories: ReturnType<typeof loadSymbolCategories>;
   private view: vscode.WebviewView | undefined;
 
   constructor(private readonly extensionUri: vscode.Uri) {
@@ -97,6 +84,7 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
 
   private load(): void {
     this.dump = undefined;
+    this.categories = undefined;
     const projectRoot = detectProjectRoot();
     if (!projectRoot) {
       return;
@@ -107,6 +95,9 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
     }
     try {
       this.dump = parseReflectionDump(fs.readFileSync(dumpPath, "utf8"));
+      // Optional engine-side category dictionary — turns the flat tree into the
+      // Script Canvas Node Palette layout. Absent → flat view (no regression).
+      this.categories = loadSymbolCategories(projectRoot);
     } catch {
       this.dump = undefined;
     }
@@ -123,67 +114,31 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
       classes: this.classContainers(),
       ebuses: this.ebusContainers(),
       globals: this.globalMembers(),
+      // Additive: when the engine shipped a category dictionary, the webview
+      // renders this nested tree instead of the flat three sections.
+      tree: this.categories ? buildCategoryTree(this.dump, this.categories) : undefined,
     };
   }
 
   private classContainers(): PaletteContainer[] {
     return sortByName(this.dump?.classes ?? []).map((c) => {
-      const methods = sortByName(c.methods).map<PaletteMember>((m) => {
-        const sig = signatureText(m.debugArgumentInfo);
-        return {
-          label: m.name,
-          detail: sig,
-          tooltip: `${c.name}:${m.name}${sig} — method`,
-          insert: `${m.name}($0)`,
-          kind: "method",
-        };
-      });
-      const properties = sortByName(c.properties).map<PaletteMember>((p) => ({
-        label: p.name,
-        detail: p.canWrite ? "" : "read-only",
-        tooltip: `${c.name}.${p.name} — property (${p.canRead ? "R" : "-"}${p.canWrite ? "W" : "-"})`,
-        insert: p.name,
-        kind: "property",
-      }));
+      const methods = sortByName(c.methods).map((m) => methodMember(c.name, m));
+      const properties = sortByName(c.properties).map((p) => propertyMember(c.name, p));
       return { name: c.name, kind: "class", members: [...methods, ...properties] };
     });
   }
 
   private ebusContainers(): PaletteContainer[] {
-    return sortByName(this.dump?.ebuses ?? []).map((b) => {
-      const members = sortByName(b.senders).map<PaletteMember>((s) => {
-        const sig = signatureText(s.debugArgumentInfo);
-        const table = s.category === "Event" ? "Event" : s.category === "Broadcast" ? "Broadcast" : "Notification";
-        const insert =
-          s.category === "Notification"
-            ? `${s.name}` // handler callback name
-            : s.category === "Event"
-              ? `${b.name}.Event.${s.name}($0)`
-              : `${b.name}.Broadcast.${s.name}($0)`;
-        return {
-          label: s.name,
-          detail: `${table}${sig}`,
-          tooltip: `${b.name}.${table}.${s.name}${sig} — ${table.toLowerCase()}`,
-          insert,
-          kind: s.category === "Notification" ? "event" : "method",
-        };
-      });
-      return { name: b.name, kind: "ebus", members };
-    });
+    return sortByName(this.dump?.ebuses ?? []).map((b) => ({
+      name: b.name,
+      kind: "ebus",
+      members: sortByName(b.senders).map((s) => senderMember(b, s)),
+    }));
   }
 
   private globalMembers(): PaletteMember[] {
-    const fns = sortByName(this.dump?.globalFunctions ?? []).map<PaletteMember>((f) => {
-      const sig = signatureText(f.debugArgumentInfo);
-      return { label: f.name, detail: sig, tooltip: `${f.name}${sig} — global function`, insert: `${f.name}($0)`, kind: "function" };
-    });
-    const props = sortByName(this.dump?.globalProperties ?? []).map<PaletteMember>((p) => ({
-      label: p.name,
-      detail: p.canWrite ? "" : "read-only",
-      tooltip: `${p.name} — global property`,
-      insert: p.name,
-      kind: "variable",
-    }));
+    const fns = sortByName(this.dump?.globalFunctions ?? []).map((f) => globalFunctionMember(f));
+    const props = sortByName(this.dump?.globalProperties ?? []).map((p) => globalPropertyMember(p));
     return [...fns, ...props];
   }
 
@@ -202,6 +157,7 @@ export class LuaPaletteViewProvider implements vscode.WebviewViewProvider {
       x: ico("close"),
       chev: ico("chevron"),
       kinds: {
+        folder: ico("folder"),
         class: ico("sym-class"),
         ebus: ico("sym-ebus"),
         method,
@@ -236,13 +192,6 @@ export async function insertLuaSymbol(insertText: string): Promise<void> {
 }
 
 // ---- Helpers ---------------------------------------------------------------
-
-function signatureText(debugArgumentInfo: string): string {
-  const sig = parseSignature(debugArgumentInfo);
-  const params = sig.params.map((p) => `${p.name}: ${p.luaType}`).join(", ");
-  const ret = sig.returnType ? `: ${sig.returnType}` : "";
-  return `(${params})${ret}`;
-}
 
 function sortByName<T extends { name: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => a.name.localeCompare(b.name));
@@ -292,6 +241,18 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
     .clear:hover { opacity: 1; }
     .search.filtering .clear { display: flex; }
 
+    /* View toggle — Categories vs raw Flat. Only shown when a category dictionary exists. */
+    .viewtoggle { display: none; margin-top: 6px; gap: 3px; }
+    .search.hastree .viewtoggle { display: flex; }
+    .seg {
+      flex: 1 1 0; height: 22px; padding: 0 8px; cursor: pointer; border-radius: 4px;
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, transparent));
+      background: transparent; color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-font-family); font-size: 11px;
+    }
+    .seg:hover { background: var(--vscode-list-hoverBackground); }
+    .seg.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+
     /* Tree */
     .tree { padding: 2px 0 8px; }
     .cat > .cat-hdr {
@@ -339,6 +300,10 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
       <input id="q" type="text" placeholder="Filter classes, methods, EBuses…" spellcheck="false" autocomplete="off" />
       <button class="clear" id="clear" title="Clear filter">${icons.x}</button>
     </div>
+    <div class="viewtoggle" id="viewtoggle" role="group" aria-label="Palette layout">
+      <button class="seg" id="seg-cat" data-mode="categorized" title="Group by Script Canvas category">Categories</button>
+      <button class="seg" id="seg-raw" data-mode="raw" title="Flat Classes / EBuses / Globals">Flat</button>
+    </div>
   </div>
   <div class="tree" id="tree"></div>
 
@@ -352,10 +317,17 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
     const searchEl = document.getElementById('search');
     const q = document.getElementById('q');
     const clearBtn = document.getElementById('clear');
+    const segCat = document.getElementById('seg-cat');
+    const segRaw = document.getElementById('seg-raw');
+
+    // Layout preference (persisted): 'categorized' (Node Palette tree) or 'raw' (flat).
+    const saved = vscode.getState() || {};
+    let viewMode = saved.viewMode === 'raw' ? 'raw' : 'categorized';
 
     // Expand state (ephemeral) for the no-filter view. Categories start collapsed.
     const openCats = new Set();
     const openContainers = new Set();
+    const openNodes = new Set(); // categorized tree: expanded branches, keyed by path
 
     function send(msg) { vscode.postMessage(msg); }
     const norm = (s) => s.toLowerCase();
@@ -439,6 +411,72 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
       return sec;
     }
 
+    // ---- Categorized tree (Node Palette layout) ----
+    // Prune a node to the active filter: a branch whose own name matches keeps its
+    // whole subtree; otherwise only descendants that match survive. Leaf keeps if
+    // its label matches.
+    function filterNode(node, f) {
+      if (node.member) { return norm(node.label).includes(f) ? node : null; }
+      if (norm(node.label).includes(f)) { return node; }
+      const kids = (node.children || []).map((c) => filterNode(c, f)).filter(Boolean);
+      return kids.length ? { label: node.label, kind: node.kind, children: kids } : null;
+    }
+    function treeMemberRow(m, depth) {
+      const row = memberRow(m);
+      row.style.paddingLeft = (12 + depth * 14) + 'px';
+      return row;
+    }
+    function appendTreeNode(parent, node, path, forceOpen, budget, depth) {
+      if (budget.left <= 0) { budget.truncated = true; return; }
+      if (node.member) { budget.left--; parent.appendChild(treeMemberRow(node.member, depth)); return; }
+      budget.left--;
+      const open = forceOpen || openNodes.has(path);
+      const row = document.createElement('button'); row.className = 'row container';
+      row.style.paddingLeft = (8 + depth * 14) + 'px';
+      const chev = document.createElement('span'); chev.className = 'chev' + (open ? ' open' : ''); chev.innerHTML = CHEV_SVG; row.appendChild(chev);
+      row.appendChild(iconSpan(node.kind));
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = node.label; row.appendChild(name);
+      const cnt = document.createElement('span'); cnt.className = 'detail'; cnt.textContent = (node.children ? node.children.length : 0); row.appendChild(cnt);
+      row.onclick = () => { if (openNodes.has(path)) { openNodes.delete(path); } else { openNodes.add(path); } scheduleRender(); };
+      parent.appendChild(row);
+      if (open) {
+        for (const child of node.children) {
+          if (budget.left <= 0) { budget.truncated = true; break; }
+          appendTreeNode(parent, child, path + '/' + child.label, forceOpen, budget, depth + 1);
+        }
+      }
+    }
+    function renderTree(f, forced, budget) {
+      let roots = model.tree;
+      if (f) { roots = roots.map((n) => filterNode(n, f)).filter(Boolean); }
+      if (f && roots.length === 0) {
+        const box = document.createElement('div'); box.className = 'empty';
+        box.textContent = 'No API symbols match "' + q.value.trim() + '".';
+        treeEl.replaceChildren(box);
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const n of roots) { appendTreeNode(frag, n, n.label, forced, budget, 0); }
+      if (budget.truncated) {
+        const note = document.createElement('div'); note.className = 'empty';
+        note.textContent = 'Showing the first ' + MAX_ROWS + ' rows — keep typing to narrow.';
+        frag.appendChild(note);
+      }
+      treeEl.replaceChildren(frag);
+    }
+
+    // Show the toggle only when a category dictionary exists; reflect the mode.
+    function syncToggle() {
+      searchEl.classList.toggle('hastree', !!model.tree);
+      segCat.classList.toggle('active', viewMode === 'categorized');
+      segRaw.classList.toggle('active', viewMode === 'raw');
+    }
+    function setMode(mode) {
+      viewMode = mode;
+      vscode.setState(Object.assign({}, vscode.getState() || {}, { viewMode: mode }));
+      scheduleRender();
+    }
+
     function render() {
       if (!model.hasDump) {
         const box = document.createElement('div'); box.className = 'empty';
@@ -450,6 +488,14 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
       }
       const f = norm(q.value.trim());
       searchEl.classList.toggle('filtering', f !== '');
+      syncToggle();
+
+      // Categorized view (engine shipped a category dictionary + user hasn't
+      // switched to Flat) → nested Node Palette tree; otherwise the flat sections.
+      if (model.tree && viewMode === 'categorized') {
+        renderTree(f, f !== '', { left: MAX_ROWS, truncated: false });
+        return;
+      }
 
       const classes = model.classes.map((c) => filterContainer(c, f)).filter(Boolean);
       const ebuses = model.ebuses.map((c) => filterContainer(c, f)).filter(Boolean);
@@ -489,6 +535,8 @@ function PALETTE_HTML(csp: string, nonce: string, initial: string, icons: Palett
     // ---- Wiring ----
     q.addEventListener('input', scheduleRender);
     clearBtn.onclick = () => { q.value = ''; q.focus(); scheduleRender(); };
+    segCat.onclick = () => setMode('categorized');
+    segRaw.onclick = () => setMode('raw');
     window.addEventListener('message', (e) => {
       const m = e.data;
       if (m && m.type === 'model') { model = m.model; render(); }

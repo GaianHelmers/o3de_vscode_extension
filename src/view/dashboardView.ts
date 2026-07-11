@@ -58,7 +58,6 @@ const COMMANDS: Record<string, string> = {
   newLuaScript: "o3de.newLuaScript",
   debugLuaFile: "o3de.debugLuaFile",
   generateLuaIntelliSense: "o3de.generateLuaIntelliSense",
-  generateLuaStubsFromDump: "o3de.generateLuaStubsFromDump",
 };
 
 // ---- Payloads --------------------------------------------------------------
@@ -120,10 +119,7 @@ function configPayload(options: BuildOptions, onboarding: OnboardingStatus) {
       },
       {
         title: "Configuration",
-        rows: [
-          { label: "Generate Lua IntelliSense", cmd: "generateLuaIntelliSense" },
-          { label: "Generate Stubs From Dump", cmd: "generateLuaStubsFromDump" },
-        ],
+        rows: [{ label: "Generate Lua IntelliSense", cmd: "generateLuaIntelliSense" }],
       },
     ],
   };

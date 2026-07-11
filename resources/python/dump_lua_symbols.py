@@ -68,6 +68,48 @@ def _call(event_name):
     return script.LuaSymbolsReporterBus(bus.Broadcast, event_name)
 
 
+# ---- Category dictionary (optional; needs the ScriptCanvasEditor PR) ---------
+#
+# The LuaSymbolCategoryReporterBus (ScriptCanvasEditor gem) resolves each symbol's
+# FINAL Script Canvas category path. It only exists on engines that merged the
+# category-bridge PR, so every call is best-effort — a missing bus just means the
+# palette falls back to its flat tree. Shape matches the extension's join contract
+# (lua_symbol_categories.json): classes/globalMethods/globalProperties/ebuses.
+
+
+def _cat_call(event_name):
+    return script.LuaSymbolCategoryReporterBus(bus.Broadcast, event_name)
+
+
+def _dump_categories(out_path):
+    categories = {
+        "classes": [
+            {"typeId": str(r.typeId), "name": str(r.name), "category": str(r.category)}
+            for r in _cat_call("GetClassCategories")
+        ],
+        "globalMethods": [{"name": str(r.name), "category": str(r.category)} for r in _cat_call("GetGlobalMethodCategories")],
+        "globalProperties": [
+            {"name": str(r.name), "category": str(r.category)} for r in _cat_call("GetGlobalPropertyCategories")
+        ],
+        "ebuses": [
+            {"name": str(r.name), "senderCategory": str(r.senderCategory), "handlerCategory": str(r.handlerCategory)}
+            for r in _cat_call("GetEBusCategories")
+        ],
+    }
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(categories, f, indent=2)
+    print(
+        "[o3de-lua] wrote categories: {} classes, {} global methods, {} global properties, {} EBuses to {}".format(
+            len(categories["classes"]),
+            len(categories["globalMethods"]),
+            len(categories["globalProperties"]),
+            len(categories["ebuses"]),
+            out_path,
+        )
+    )
+
+
 def main():
     out_path = os.environ.get("O3DE_LUA_SYMBOLS_OUT")
     if not out_path:
@@ -97,6 +139,16 @@ def main():
             out_path,
         )
     )
+
+    # Best-effort: also emit the category dictionary next to the symbols dump, so
+    # a single headless scan feeds the palette's nested (Node Palette) layout.
+    cat_out = os.environ.get("O3DE_LUA_CATEGORIES_OUT") or os.path.join(
+        os.path.dirname(out_path), "lua_symbol_categories.json"
+    )
+    try:
+        _dump_categories(cat_out)
+    except Exception as ex:  # noqa: BLE001 - never let categories fail the symbols dump
+        print("[o3de-lua] category dictionary not available (engine lacks the category-bridge PR?): {}".format(ex))
 
 
 def _quit_editor():
