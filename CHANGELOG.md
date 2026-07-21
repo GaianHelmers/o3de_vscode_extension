@@ -3,7 +3,7 @@
 All notable changes to the **O3DE Development Tools** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.1.2] — 2026-07-20
+## [0.2.0] — 2026-07-20
 
 ### Added
 
@@ -42,8 +42,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   its terminal orphaned in the panel after you closed the wizard. The terminal now exits (and VS Code
   disposes it) when the wizard window closes; a launch error still leaves it open so the failure is
   visible. (#15)
-
-### Changed
 
 - **Function completions now insert their parentheses** — accepting a function suggestion inserts
   `name(args)` with the cursor/placeholders inside the parens instead of just the bare name, in both Lua
