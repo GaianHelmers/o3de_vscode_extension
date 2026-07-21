@@ -5,18 +5,32 @@ A developer companion for [Open 3D Engine (O3DE)](https://o3de.org) in Visual St
 > 🧪 **Early / experimental.** Scope and features are actively evolving. Windows-focused (MSVC).
 
 Everything is driven from a single **O3DE Development Tools** panel in the activity bar: a Dashboard
-with live status, Build/Run, utilities, and collapsible Configuration & Onboarding sections.
+with live status, Build/Run, utilities, and collapsible Configuration & Onboarding sections, plus a
+**Lua Palette** and an **Advanced** view.
 
 ## Features
 
+- **Per-project opt-in** — the extension's automatic behavior runs only in projects you enable
+  (a one-time prompt the first time you open an O3DE project; stored in `.vscode/settings.json`). A
+  non-O3DE workspace (e.g. web development) stays completely dormant.
 - **Guided workspace setup** — assemble the multi-root workspace (project + engine source + gems)
-  into a `.code-workspace`, with `.vscode` settings generated for you.
+  into a `.code-workspace`, with `.vscode` settings generated for you. **Add Gems / Folders** adds
+  more roots to the live workspace on demand.
 - **Windows MSVC environment** — auto-detects Visual Studio, opens a developer terminal with the
   MSVC environment established; detects Ninja and offers to install it.
 - **One-click CMake configure & build** — selectable generator, config, and target(s), mirroring
   O3DE's build flow, with a process-guard for locked build outputs.
 - **Run & force-quit** — launch the Editor or the project's GameLauncher (with custom launch
-  options) and stop the whole process tree (AssetProcessor and friends included).
+  options) and stop the whole process tree (AssetProcessor and friends included). Run is a toggle:
+  pressing it (or `Ctrl+Alt+R`) while the app is up force-quits it (configurable).
+- **Advanced CMake flags** — an **Advanced** view manages extra `-D` cache variables passed to
+  Configure (curated toggles for RenderDoc / `CMAKE_OBJECT_PATH_MAX`, plus any custom flag), stored
+  per-project and applied on the next reconfigure.
+- **LLM connections (MCP)** — an opt-in localhost [MCP](https://modelcontextprotocol.io) endpoint so
+  an assistant like Claude can build, run, check run-state, read structured build results, and
+  read/change build config — per-project, off by default, localhost-bound.
+- **Class Creation Wizard** — launch O3DE's component/EBus class-scaffolding tool for the project's
+  engine straight from the panel.
 - **C++ IntelliSense** — generates `c_cpp_properties.json` from the CMake File API and registers a
   live cpptools configuration provider; engine paths resolve to your source engine.
 - **Project config generation** — `.vscode` `settings.json` + `launch.json` (Editor / GameLauncher /
@@ -62,7 +76,7 @@ it walks through authoring, attaching a script to an entity, running it, and hit
 ## Planned features
 
 - **Reflection browser** — deeper inspection of reflected components and the BehaviorContext.
-- **Templates & a Class Creation Wizard** (components, EBuses, gems).
+- **Registerable templates** (Lua, components, EBuses, gems).
 - Broader cross-platform support.
 
 ## Requirements
