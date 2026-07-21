@@ -14,12 +14,17 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "../log";
-import { discoverProjects, discoverGems, discoverSourceEngines, discoverEngines } from "../o3de/discovery";
+import {
+  discoverProjects,
+  discoverGems,
+  discoverEngineGems,
+  discoverSourceEngines,
+  discoverEngines,
+} from "../o3de/discovery";
 import { readProject, O3deProject } from "../o3de/identity";
 import {
   buildWorkspaceFileContent,
   defaultWorkspaceFilePath,
-  orderWorkspaceFolders,
   NamedPath,
 } from "./workspaceFile";
 import { writeProjectSettings } from "../build/writeProjectConfig";
@@ -233,10 +238,22 @@ function isBuiltInGemPath(gemPath: string, enginePrefixes: string[]): boolean {
 
 async function pickGemsAndFolders(): Promise<NamedPath[]> {
   const enginePrefixes = discoverEngines().map((e) => path.resolve(e.path) + path.sep);
-  // ALL registered gems — project-independent. A gem needn't be enabled on any
-  // project to be added to the workspace for reference/navigation.
-  const allGems = discoverGems()
+  // ALL gems — project-independent. A gem needn't be enabled on any project to
+  // be added to the workspace for reference/navigation. User-registered gems
+  // (o3de manifest) plus the engine's built-in gems (engine.json), deduped by
+  // path so a gem registered both ways appears once. Built-ins are hidden until
+  // the "Show built-in gems" toggle since there are hundreds.
+  const seenGemPaths = new Set<string>();
+  const allGems = [...discoverGems(), ...discoverEngineGems()]
     .filter((gem) => gem.type === undefined || gem.type === "Code" || gem.type === "Tool")
+    .filter((gem) => {
+      const key = path.resolve(gem.path);
+      if (seenGemPaths.has(key)) {
+        return false;
+      }
+      seenGemPaths.add(key);
+      return true;
+    })
     .map((gem) => ({ name: gem.gemName, path: gem.path, builtIn: isBuiltInGemPath(gem.path, enginePrefixes) }));
 
   interface Item extends vscode.QuickPickItem {
@@ -312,85 +329,42 @@ async function pickGemsAndFolders(): Promise<NamedPath[]> {
   return result;
 }
 
-// Resolve the target .code-workspace: the open one, else pick an existing one / browse.
-// (We only need a workspace FILE to modify — not a project to filter gems by.)
-async function resolveTargetWorkspaceFile(): Promise<string | undefined> {
-  const open = vscode.workspace.workspaceFile;
-  if (open && open.scheme === "file" && open.fsPath.toLowerCase().endsWith(".code-workspace")) {
-    return open.fsPath;
-  }
-
-  interface Item extends vscode.QuickPickItem {
-    file?: string;
-    browse?: boolean;
-  }
-  const items: Item[] = [];
-  for (const project of discoverProjects()) {
-    const candidate = defaultWorkspaceFilePath(project);
-    if (fs.existsSync(candidate)) {
-      items.push({ label: path.basename(candidate), description: candidate, file: candidate });
-    }
-  }
-  items.push({ label: "$(folder-opened) Browse for a .code-workspace…", browse: true });
-
-  const pick = await vscode.window.showQuickPick(items, {
-    title: "Add Gems / Folders — target workspace",
-    placeHolder: "Which .code-workspace to add to?",
-  });
-  if (!pick) {
-    return undefined;
-  }
-  if (pick.file) {
-    return pick.file;
-  }
-  const picked = await vscode.window.showOpenDialog({
-    canSelectFiles: true,
-    canSelectFolders: false,
-    canSelectMany: false,
-    filters: { "VS Code Workspace": ["code-workspace"] },
-    openLabel: "Select workspace",
-  });
-  return picked?.[0]?.fsPath;
-}
-
+// Add the picked gem(s)/folder(s) to the LIVE workspace via VS Code's native
+// folder API -- exactly what File > "Add Folder to Workspace" does. This is a
+// pure workspace mutation: VS Code appends the roots and persists them itself
+// (preserving order, settings, and comments in the .code-workspace). We do NOT
+// touch <project>/.vscode config or CMake -- adding a gem for reference must not
+// reconfigure the project (issue #22).
 export async function addGemsToWorkspace(): Promise<void> {
-  const wsPath = await resolveTargetWorkspaceFile();
-  if (!wsPath) {
-    return;
-  }
-
   const additions = await pickGemsAndFolders();
   if (additions.length === 0) {
     log().info("Add Gems / Folders: nothing selected.");
     return;
   }
 
-  let workspace: { folders: NamedPath[]; settings?: Record<string, unknown> };
-  try {
-    workspace = JSON.parse(fs.readFileSync(wsPath, "utf8"));
-    if (!Array.isArray(workspace.folders)) {
-      workspace.folders = [];
-    }
-  } catch (err) {
-    log().error(`Failed to read ${wsPath}: ${String(err)}`);
-    void vscode.window.showErrorMessage("O3DE: could not read the workspace file (see the O3DE log).");
+  const present = new Set(
+    (vscode.workspace.workspaceFolders ?? []).map((folder) => path.resolve(folder.uri.fsPath)),
+  );
+  const fresh = additions.filter((addition) => !present.has(path.resolve(addition.path)));
+  if (fresh.length === 0) {
+    void vscode.window.showInformationMessage("O3DE: those folder(s) are already in the workspace.");
     return;
   }
 
-  const seen = new Set(workspace.folders.map((folder) => path.resolve(folder.path)));
-  let added = 0;
-  for (const addition of additions) {
-    if (!seen.has(path.resolve(addition.path))) {
-      workspace.folders.push(addition);
-      seen.add(path.resolve(addition.path));
-      added += 1;
-    }
-  }
-  // Keep the canonical order: Project → gems/custom → Engine source(s).
-  workspace.folders = orderWorkspaceFolders(workspace.folders);
-  fs.writeFileSync(wsPath, `${JSON.stringify(workspace, null, 2)}\n`, "utf8");
-  log().info(`Added ${added} folder(s) to ${wsPath}.`);
-  void vscode.window.showInformationMessage(
-    `O3DE: added ${added} folder(s) to ${path.basename(wsPath)}. Reload the workspace window to see them.`,
+  // Append at the end (native add-folder semantics); VS Code persists the change.
+  const start = vscode.workspace.workspaceFolders?.length ?? 0;
+  const ok = vscode.workspace.updateWorkspaceFolders(
+    start,
+    0,
+    ...fresh.map((addition) => ({ uri: vscode.Uri.file(addition.path), name: addition.name })),
   );
+  if (!ok) {
+    log().error(`updateWorkspaceFolders rejected ${fresh.length} folder(s).`);
+    void vscode.window.showErrorMessage("O3DE: could not add the folder(s) to the workspace.");
+    return;
+  }
+  log().info(`Added ${fresh.length} folder(s) to the workspace.`);
+  for (const addition of fresh) {
+    log().info(`   • ${addition.name} → ${addition.path}`);
+  }
 }

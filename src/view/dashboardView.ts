@@ -29,6 +29,7 @@ import { DependencyStatus } from "../deps/dependencyStatus";
 import { buildOnboardingModel, resolveGuidedAction, View } from "../deps/registry";
 import { runGuidedAction } from "../deps/actions";
 import { loadIcon } from "./svgAssets";
+import { getNonce } from "./webviewUtil";
 
 // ---- Webview → command dispatch table (whitelist) --------------------------
 const COMMANDS: Record<string, string> = {
@@ -38,6 +39,7 @@ const COMMANDS: Record<string, string> = {
   stop: "o3de.stopRun",
   terminal: "o3de.openDeveloperTerminal",
   log: "o3de.showLog",
+  openSettings: "o3de.openSettings",
   editorLog: "o3de.showEditorLog",
   errorLog: "o3de.showErrorLog",
   checkVs: "o3de.checkVisualStudio",
@@ -439,6 +441,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         <button id="editorLog" class="icon" title="Open the O3DE Editor.log for this project">${icon("doc")}</button>
         <button id="errorLog" class="icon" title="Open the O3DE Error.log for this project">${icon("error")}</button>
         <button id="runDebug" class="icon" title="Run the selected target under the C++ debugger">${icon("bug")}</button>
+        <button id="openSettings" class="icon" title="Open O3DE Development Tools settings">${icon("gear")}</button>
       </div>
     </div>
 
@@ -690,6 +693,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     document.getElementById('log').onclick = () => send('log');
     document.getElementById('editorLog').onclick = () => send('editorLog');
     document.getElementById('errorLog').onclick = () => send('errorLog');
+    document.getElementById('openSettings').onclick = () => send('openSettings');
     document.getElementById('classWizard').onclick = () => send('classWizard');
     // Re-scan sits inside the Onboarding header button — stop the click from also
     // toggling the section's collapse.
@@ -716,11 +720,3 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 }
 
 // ---- Nonce (CSP) -----------------------------------------------------------
-function getNonce(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let text = "";
-  for (let i = 0; i < 32; i++) {
-    text += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return text;
-}

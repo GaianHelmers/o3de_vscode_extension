@@ -14,13 +14,10 @@
 // ============================================================================
 
 import * as vscode from "vscode";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { readProject } from "../o3de/identity";
 import { gameLauncherExeName } from "./runCommand";
+import { anyImageRunning } from "./processProbe";
 import * as runManager from "./runManager";
-
-const execAsync = promisify(exec);
 
 const CONTEXT_KEY = "o3de.appRunning";
 const POLL_MS = 3000;
@@ -38,24 +35,6 @@ function runTargetImages(): string[] {
   return [...images];
 }
 
-/** True if a process with this image name is live (tasklist prints its row; else an INFO line). */
-async function isImageRunning(image: string): Promise<boolean> {
-  try {
-    const { stdout } = await execAsync(`tasklist /FI "IMAGENAME eq ${image}" /NH`);
-    return stdout.toLowerCase().includes(image.toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
-async function anyImageRunning(images: string[]): Promise<boolean> {
-  if (process.platform !== "win32" || images.length === 0) {
-    return false;
-  }
-  const results = await Promise.all(images.map(isImageRunning));
-  return results.some(Boolean);
-}
-
 // ---- Poller ----------------------------------------------------------------
 export class RunState {
   private timer: NodeJS.Timeout | undefined;
@@ -69,10 +48,21 @@ export class RunState {
     return this.current === true;
   }
 
-  /** Publish the initial state and begin polling for external start/stop. */
+  /** Publish the initial state and begin polling for external start/stop (idempotent). */
   start(): void {
+    if (this.timer) {
+      return; // already polling
+    }
     void this.refresh();
     this.timer = setInterval(() => void this.refresh(), POLL_MS);
+  }
+
+  /** Stop polling (e.g. when O3DE Tools is disabled for the project). */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
   }
 
   /** Re-detect and republish if it changed. Call after Run / Stop for an instant flip. */
@@ -86,9 +76,7 @@ export class RunState {
   }
 
   dispose(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-    }
+    this.stop();
     this.changed.dispose();
   }
 }

@@ -44,6 +44,17 @@ export function parseCachedGenerator(cacheText: string): string | undefined {
   return undefined;
 }
 
+/** A cache entry's value by name, from a `NAME:TYPE=VALUE` line (e.g. LY_RENDERDOC_ENABLED:BOOL=ON). */
+export function readCachedValue(cacheText: string, name: string): string | undefined {
+  for (const line of cacheText.split(/\r?\n/)) {
+    const match = /^([^:=/#]+):[^=]+=(.*)$/.exec(line.trim());
+    if (match && match[1] === name) {
+      return match[2];
+    }
+  }
+  return undefined;
+}
+
 // ---- Configure command line ------------------------------------------------
 export interface ConfigureInputs {
   projectPath: string;
@@ -51,6 +62,7 @@ export interface ConfigureInputs {
   generator: string; // "Ninja Multi-Config" | "Visual Studio 17 2022"
   thirdPartyPath: string; // LY_3RDPARTY_PATH
   compiler?: "MSVC" | "Clang"; // default MSVC
+  extraCacheArgs?: Record<string, string>; // Advanced-tab -D<VAR>=<value> cache flags
 }
 
 /**
@@ -78,6 +90,12 @@ export function buildConfigureArgs(inputs: ConfigureInputs): string[] {
     } else {
       args.push("-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++");
     }
+  }
+
+  // Advanced-tab extra cache variables (e.g. LY_RENDERDOC_ENABLED, CMAKE_OBJECT_PATH_MAX).
+  // Sorted for a stable, diff-friendly command line.
+  for (const key of Object.keys(inputs.extraCacheArgs ?? {}).sort()) {
+    args.push(`-D${key}=${inputs.extraCacheArgs![key]}`);
   }
   return args;
 }

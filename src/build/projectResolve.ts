@@ -8,6 +8,17 @@
 import * as vscode from "vscode";
 import { readProject, O3deProject } from "../o3de/identity";
 
+/** The first O3DE project among the open workspace folders (non-interactive). */
+export function firstWorkspaceProject(): O3deProject | undefined {
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const project = readProject(folder.uri.fsPath);
+    if (project) {
+      return project;
+    }
+  }
+  return undefined;
+}
+
 /** Resolve the O3DE project from the open workspace; prompt if there are several. */
 export async function resolveWorkspaceProject(title: string): Promise<O3deProject | undefined> {
   const found: O3deProject[] = [];

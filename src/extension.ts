@@ -18,11 +18,20 @@ import { DashboardViewProvider } from "./view/dashboardView";
 import { OnboardingStatus } from "./view/onboardingStatus";
 import { openEditorLog, openErrorLog } from "./build/o3deLogs";
 import { runSetupWizard, addGemsToWorkspace } from "./workspace/setupWizard";
+import {
+  isO3deWorkspace,
+  isWorkspaceEnabled,
+  primaryO3deFolder,
+  o3deProjectFolders,
+  enableStateForFolder,
+  setProjectEnabled,
+} from "./workspace/projectScope";
 import { writeProjectConfig } from "./build/writeProjectConfig";
 import { configureProject } from "./build/configure";
 import { buildProject } from "./build/build";
 import { selectTargets } from "./build/selectTargets";
 import { runProject, stopRun } from "./build/run";
+import { forceCloseRuntime } from "./build/runQuery";
 import { runInDebug } from "./build/runDebug";
 import { RunState } from "./build/runState";
 import { generateCppProperties, refreshCppPropertiesOnStartup } from "./intellisense/generate";
@@ -32,6 +41,8 @@ import { registerLuaHandoff } from "./lua/handoff";
 import { generateLuaIntelliSense, generateLuaStubsFromDump } from "./lua/intellisense/intelliSense";
 import { launchClassWizard } from "./tools/classWizard";
 import { LuaPaletteViewProvider, LUA_PALETTE_VIEW_ID } from "./lua/palette/luaPaletteProvider";
+import { AdvancedViewProvider } from "./view/advancedView";
+import { EXTENSION_ID } from "./constants";
 import { DependencyStatus } from "./deps/dependencyStatus";
 import { O3deMcpServer } from "./mcp/server";
 import {
@@ -51,10 +62,6 @@ export function activate(context: vscode.ExtensionContext): void {
   initLog(context);
   log().info("O3DE Development Tools activated.");
   log().show(true); // reveal our Output channel (dev convenience; keeps focus)
-
-  // Verify the Windows build toolchain (Visual Studio / MSVC) is present.
-  // Non-interactive: log results, and only alert the user if something is wrong.
-  void ensureVisualStudio({ interactive: false });
 
   // Selectable build attributes (generator / config), shown in the O3DE tab.
   const buildOptions = new BuildOptions(context.workspaceState);
@@ -76,23 +83,85 @@ export function activate(context: vscode.ExtensionContext): void {
   // trigger builds and read structured results. Off by default; the MCP SDK is
   // only loaded when started. Toggled from the Onboarding ▸ Optional section.
   const mcpServer = new O3deMcpServer(context, buildOptions);
+
+  // `llm.enabled` is per-project (folder-scoped) so enabling it on one project
+  // never affects another. Read it against the O3DE project's folder.
+  const llmEnabledForProject = (): boolean =>
+    vscode.workspace.getConfiguration("o3de", primaryO3deFolder()?.uri).get<boolean>("llm.enabled", false);
+
+  // MCP runs only when BOTH the project is opted in AND LLM connections are on —
+  // so a dormant/non-enabled workspace never starts a server or writes .mcp.json.
   const reconcileMcp = async (): Promise<void> => {
-    if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
+    if (isWorkspaceEnabled() && llmEnabledForProject()) {
       await mcpServer.restart(); // idempotent start + picks up a changed port; writes .mcp.json
     } else {
       await mcpServer.stop();
-      mcpServer.removeClientConfig(); // clean the o3de entry out of .mcp.json on disable
+      mcpServer.removeClientConfig(); // clean the o3de entry out of .mcp.json when off
     }
     void deps.refresh(); // refresh the Optional row's dot/detail
   };
-  if (vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
-    void mcpServer.start().then(() => deps.refresh()); // re-detect once the port is live
-  }
-  const mcpConfigListener = vscode.workspace.onDidChangeConfiguration((e) => {
+
+  // ---- Per-project gate: reconcile the automatic machinery to o3de.enabled ----
+  // The extension activates in every window, but everything automatic runs ONLY
+  // where the user opted this project in. Session-once pieces (VS guard, cpptools
+  // provider) register at most once; restartable pieces (run-state watcher, MCP)
+  // follow the toggle. A non-O3DE / not-enabled workspace stays fully dormant.
+  let providersStarted = false;
+  const applyEnablement = (): void => {
+    if (isWorkspaceEnabled()) {
+      if (!providersStarted) {
+        providersStarted = true;
+        void ensureVisualStudio({ interactive: false }); // log; alert only if broken
+        if (vscode.workspace.getConfiguration("o3de").get<boolean>("intellisense.autoRefreshOnStartup", true)) {
+          void refreshCppPropertiesOnStartup(buildOptions); // re-emit c_cpp_properties.json (no reconfigure)
+        }
+        void registerConfigurationProvider(context, buildOptions); // live C++ IntelliSense (cpptools)
+      }
+      runState.start(); // watch the running app for the Run/Stop toggle
+      void reconcileMcp();
+    } else {
+      runState.stop();
+      void mcpServer.stop();
+    }
+    void deps.refresh();
+    onboarding.notifyChanged();
+  };
+
+  // One-time opt-in prompt for an undecided O3DE project (at most once per session).
+  let promptedThisSession = false;
+  const maybePromptEnable = async (): Promise<void> => {
+    if (promptedThisSession || !isO3deWorkspace()) {
+      return;
+    }
+    const folder = primaryO3deFolder();
+    if (!folder || enableStateForFolder(folder) !== "undecided") {
+      return;
+    }
+    promptedThisSession = true;
+    const choice = await vscode.window.showInformationMessage(
+      `Enable O3DE Tools for "${folder.name}"? Its automatic features (C++/Lua IntelliSense, ` +
+        "build/run, MCP) run only in projects you enable — other workspaces stay untouched.",
+      "Enable",
+      "Not now",
+      "Never",
+    );
+    if (choice === "Enable") {
+      await setProjectEnabled(folder, true); // the config listener applies it live
+    } else if (choice === "Never") {
+      await setProjectEnabled(folder, false);
+    }
+    // "Not now" / dismiss writes nothing -> stays undecided -> asked again next session.
+  };
+
+  const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("o3de.enabled")) {
+      applyEnablement(); // start/stop the runtime as the project is opted in/out
+    }
     if (
       e.affectsConfiguration("o3de.llm.enabled") ||
       e.affectsConfiguration("o3de.llm.port") ||
-      e.affectsConfiguration("o3de.llm.requireToken")
+      e.affectsConfiguration("o3de.llm.requireToken") ||
+      e.affectsConfiguration("o3de.llm.allowForceClose") // re-register tools with the new setting
     ) {
       void reconcileMcp();
     }
@@ -103,7 +172,14 @@ export function activate(context: vscode.ExtensionContext): void {
     // Complete, idempotent setup: turn it on, ensure the server is actually
     // listening, and write .mcp.json into the project — so it's genuinely
     // connectable, not just flagged "on".
-    await vscode.workspace.getConfiguration("o3de").update("llm.enabled", true, vscode.ConfigurationTarget.Global);
+    const folder = primaryO3deFolder();
+    await vscode.workspace
+      .getConfiguration("o3de", folder?.uri)
+      .update(
+        "llm.enabled",
+        true,
+        folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace,
+      );
     await mcpServer.start(); // idempotent (no-op if already running)
     mcpServer.writeClientConfig(); // merge our entry into the project's .mcp.json
     void deps.refresh();
@@ -118,10 +194,17 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   });
   const llmDisable = vscode.commands.registerCommand("o3de.llm.disable", async () => {
-    await vscode.workspace.getConfiguration("o3de").update("llm.enabled", false, vscode.ConfigurationTarget.Global);
+    const folder = primaryO3deFolder();
+    await vscode.workspace
+      .getConfiguration("o3de", folder?.uri)
+      .update(
+        "llm.enabled",
+        false,
+        folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace,
+      );
   });
   const llmShowInfo = vscode.commands.registerCommand("o3de.llm.showConnectionInfo", async () => {
-    if (!vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false)) {
+    if (!llmEnabledForProject()) {
       void vscode.window.showInformationMessage(
         "O3DE: LLM connections are off. Enable them from Onboarding ▸ Optional (or “O3DE: Enable LLM Connections”).",
       );
@@ -145,6 +228,40 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // Commands: opt this project in / out of O3DE Tools (per-project o3de.enabled).
+  const pickEnableFolder = async (): Promise<vscode.WorkspaceFolder | undefined> => {
+    const folders = o3deProjectFolders();
+    if (folders.length <= 1) {
+      return folders[0] ?? primaryO3deFolder();
+    }
+    const pick = await vscode.window.showQuickPick(
+      folders.map((f) => ({ label: f.name, description: f.uri.fsPath, folder: f })),
+      { title: "O3DE: which project?", placeHolder: "Choose the project to enable/disable" },
+    );
+    return pick?.folder;
+  };
+  const enableForProject = vscode.commands.registerCommand("o3de.enableForProject", async () => {
+    const folder = await pickEnableFolder();
+    if (!folder) {
+      void vscode.window.showInformationMessage("O3DE: no O3DE project in this workspace to enable.");
+      return;
+    }
+    await setProjectEnabled(folder, true);
+    applyEnablement(); // start the runtime live (no reload)
+    void vscode.window.showInformationMessage(`O3DE Tools enabled for "${folder.name}".`);
+  });
+  const disableForProject = vscode.commands.registerCommand("o3de.disableForProject", async () => {
+    const folder = await pickEnableFolder();
+    if (!folder) {
+      return;
+    }
+    await setProjectEnabled(folder, false);
+    applyEnablement();
+    void vscode.window.showInformationMessage(
+      `O3DE Tools disabled for "${folder.name}". Reload the window to fully unload the C++ providers.`,
+    );
+  });
+
   // Command: "O3DE: Hello World".
   const helloWorld = vscode.commands.registerCommand("o3de.helloWorld", () => {
     log().info("Hello World command invoked.");
@@ -154,6 +271,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Command: "O3DE: Show Log" — reveal this channel any time.
   const showLog = vscode.commands.registerCommand("o3de.showLog", () => {
     log().show();
+  });
+
+  // Command: "O3DE: Open Settings" — VS Code Settings filtered to this extension.
+  const openSettings = vscode.commands.registerCommand("o3de.openSettings", () => {
+    void vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${EXTENSION_ID}`);
   });
 
   // Commands: open the O3DE project's runtime logs (Editor.log / Error.log).
@@ -206,10 +328,23 @@ export function activate(context: vscode.ExtensionContext): void {
     void buildProject(buildOptions);
   });
 
-  // Command: "O3DE: Run" — launch the selected run target (detached, tracked for force-quit).
+  // Command: "O3DE: Run" — a toggle (setting-gated). The Editor can't run twice, so
+  // with o3de.run.toggleToQuit on (default), pressing Run (or its hotkey) while an
+  // app is already up instead force-quits it — one key to launch on demand and quit
+  // on demand. Otherwise it launches the run target (detached, tracked for force-quit).
   const run = vscode.commands.registerCommand("o3de.run", async () => {
-    await runProject(buildOptions);
-    void runState.refresh(); // flip the toolbar to Stop immediately
+    const toggleToQuit = vscode.workspace
+      .getConfiguration("o3de", primaryO3deFolder()?.uri)
+      .get<boolean>("run.toggleToQuit", true);
+    if (toggleToQuit && runState.isRunning) {
+      const result = await forceCloseRuntime();
+      if (!result.note) {
+        void vscode.window.showInformationMessage("O3DE: force-quit the running app.");
+      }
+    } else {
+      await runProject(buildOptions);
+    }
+    void runState.refresh(); // flip the toolbar (Play <-> Stop) immediately
   });
 
   // Command: "O3DE: Run in Debug (C++)" — launch the selected target under cppvsdbg.
@@ -339,19 +474,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const foldersChanged = vscode.workspace.onDidChangeWorkspaceFolders(() => {
     onboarding.notifyChanged();
     void deps.refresh(); // project/engine presence can change with the folders
+    applyEnablement(); // an added/removed project can flip the enabled state
+    void maybePromptEnable(); // a newly-added O3DE project may need the opt-in
   });
 
-  // Begin watching run state so the Run/Stop toolbar toggle tracks the live app.
-  runState.start();
-
-  // Low-cost IntelliSense refresh on startup (setting-gated): re-emit c_cpp_properties.json from the
-  // existing File API reply so it tracks the last configure — no cmake reconfigure.
-  if (vscode.workspace.getConfiguration("o3de").get<boolean>("intellisense.autoRefreshOnStartup", true)) {
-    void refreshCppPropertiesOnStartup(buildOptions);
-  }
-
-  // Live C++ IntelliSense: register with cpptools as a per-file configuration provider (reactive).
-  void registerConfigurationProvider(context, buildOptions);
+  // Gate the automatic machinery on the per-project opt-in: start it now when the
+  // project is enabled (run-state watcher, C++ IntelliSense, MCP), else offer the
+  // one-time prompt and stay dormant until accepted.
+  applyEnablement();
+  void maybePromptEnable();
 
   // Lua: remote debugger (DAP) + Editor "Open Lua Editor" handoff (vscode:// URI).
   registerLuaDebug(context);
@@ -366,6 +497,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const luaPalette = new LuaPaletteViewProvider(context.extensionUri);
   const luaPaletteView = vscode.window.registerWebviewViewProvider(LUA_PALETTE_VIEW_ID, luaPalette);
   const luaPaletteRefresh = vscode.commands.registerCommand("o3de.luaPalette.refresh", () => luaPalette.refresh());
+
+  // Advanced view (3rd O3DE view) — extra CMake configure flags + future advanced tools.
+  const advancedView = vscode.window.registerWebviewViewProvider(
+    AdvancedViewProvider.viewType,
+    new AdvancedViewProvider(),
+  );
 
   // Lua IntelliSense: dump the reflected API (headless Editor) → LuaLS stubs.
   // Refresh the palette afterwards so it populates from the fresh dump.
@@ -386,13 +523,16 @@ export function activate(context: vscode.ExtensionContext): void {
     deps,
     runState,
     mcpServer,
-    mcpConfigListener,
+    configListener,
     llmEnable,
     llmDisable,
     llmShowInfo,
+    enableForProject,
+    disableForProject,
     foldersChanged,
     helloWorld,
     showLog,
+    openSettings,
     checkVs,
     openTerm,
     checkNinja,
@@ -420,6 +560,7 @@ export function activate(context: vscode.ExtensionContext): void {
     genLuaStubsFromDump,
     luaPaletteView,
     luaPaletteRefresh,
+    advancedView,
     dashboardView,
     statusItem,
   );

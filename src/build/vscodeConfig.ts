@@ -37,6 +37,9 @@ export function buildProjectSettings(opts: ProjectSettingsOptions): Record<strin
     "cmake.configureOnOpen": false,
     // cpptools → our live provider (per-file); c_cpp_properties.json is the fallback.
     "C_Cpp.default.configurationProvider": EXTENSION_ID,
+    // Accepting a function completion inserts its parentheses (cursor inside), not
+    // just the bare name — matches the Lua completion behavior.
+    "C_Cpp.autocompleteAddParentheses": true,
     "cmake.defaultVariants": {
       buildType: {
         default: opts.defaultConfig,

@@ -3,6 +3,7 @@ import {
   buildConfigureArgs,
   formatCommand,
   parseCachedGenerator,
+  readCachedValue,
 } from "../build/configureCommand";
 
 suite("configureCommand", () => {
@@ -23,6 +24,33 @@ suite("configureCommand", () => {
       "D:/OffLocalDev/CurvesTest/build/windows",
       "-DLY_3RDPARTY_PATH=C:/Users/x/.o3de/3rdParty",
     ]);
+  });
+
+  test("buildConfigureArgs appends extra cache flags as sorted -D VAR=value", () => {
+    const argv = buildConfigureArgs({
+      projectPath: "P",
+      buildDir: "B",
+      generator: "Ninja Multi-Config",
+      thirdPartyPath: "T",
+      extraCacheArgs: { LY_RENDERDOC_ENABLED: "ON", CMAKE_OBJECT_PATH_MAX: "1000" },
+    });
+    // Sorted by key -> CMAKE_OBJECT_PATH_MAX before LY_RENDERDOC_ENABLED, both last.
+    assert.deepStrictEqual(argv.slice(-2), [
+      "-DCMAKE_OBJECT_PATH_MAX=1000",
+      "-DLY_RENDERDOC_ENABLED=ON",
+    ]);
+  });
+
+  test("buildConfigureArgs with no extra flags is unchanged", () => {
+    const argv = buildConfigureArgs({
+      projectPath: "P",
+      buildDir: "B",
+      generator: "Ninja Multi-Config",
+      thirdPartyPath: "T",
+      extraCacheArgs: {},
+    });
+    assert.strictEqual(argv.includes("-DCMAKE_OBJECT_PATH_MAX=1000"), false);
+    assert.strictEqual(argv[argv.length - 1], "-DLY_3RDPARTY_PATH=T");
   });
 
   test("formatCommand quotes tokens with spaces / = / path chars, leaves bare flags", () => {
@@ -52,5 +80,16 @@ suite("configureCommand", () => {
 
   test("parseCachedGenerator returns undefined when the line is absent", () => {
     assert.strictEqual(parseCachedGenerator("SOME_VAR:BOOL=ON\n"), undefined);
+  });
+
+  test("readCachedValue reads a NAME:TYPE=VALUE cache entry", () => {
+    const cache = [
+      "//A comment",
+      "LY_RENDERDOC_ENABLED:BOOL=ON",
+      "CMAKE_OBJECT_PATH_MAX:STRING=1000",
+    ].join("\n");
+    assert.strictEqual(readCachedValue(cache, "LY_RENDERDOC_ENABLED"), "ON");
+    assert.strictEqual(readCachedValue(cache, "CMAKE_OBJECT_PATH_MAX"), "1000");
+    assert.strictEqual(readCachedValue(cache, "MISSING"), undefined);
   });
 });

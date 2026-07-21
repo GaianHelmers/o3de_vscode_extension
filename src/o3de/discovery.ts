@@ -6,6 +6,7 @@
 //  engine a project targets. vscode-free; consumed by the setup wizard (A.2).
 // ============================================================================
 
+import * as path from "path";
 import { readManifest } from "./manifest";
 import {
   O3deEngine,
@@ -52,6 +53,31 @@ export function discoverGems(): O3deGem[] {
   return manifest.gems
     .map((gemPath) => readGem(gemPath))
     .filter((gem): gem is O3deGem => gem !== undefined);
+}
+
+/**
+ * The built-in gems of the registered engine(s): each engine.json lists its gem
+ * dirs in `external_subdirectories` (relative to the engine root). These are NOT
+ * in the user manifest, so they only surface here. There are ~100+ per engine.
+ */
+export function discoverEngineGems(): O3deGem[] {
+  const gems: O3deGem[] = [];
+  const seen = new Set<string>();
+  for (const engine of discoverEngines()) {
+    for (const sub of engine.externalSubdirectories) {
+      const dir = path.isAbsolute(sub) ? sub : path.join(engine.path, sub);
+      const key = path.resolve(dir);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const gem = readGem(dir);
+      if (gem) {
+        gems.push(gem);
+      }
+    }
+  }
+  return gems;
 }
 
 // ---- Project → engine resolution -------------------------------------------

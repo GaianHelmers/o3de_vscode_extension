@@ -3,12 +3,17 @@
 //
 //  Common O3DE C++ patterns (TickBus, reflection, EBus scaffold, printf). Written
 //  WRITE-IF-ABSENT: never clobbers a snippets file the user has customized.
+//
+//  Every snippet is scoped to C/C++ on write — a `.code-snippets` entry with no
+//  `scope` is offered in EVERY language, so these C++ patterns (e.g. AZ_Printf)
+//  would otherwise pollute .lua completion (and any other file).
 // ============================================================================
 
 import * as fs from "fs";
 import * as path from "path";
 
 const SNIPPETS_FILE = "O3DEDevSnippets.code-snippets";
+const CPP_SCOPE = "cpp,c";
 
 /** The bundled O3DE snippet set (JSON object keyed by snippet name). */
 export const O3DE_SNIPPETS: Record<string, unknown> = {
@@ -33,9 +38,12 @@ export const O3DE_SNIPPETS: Record<string, unknown> = {
     description: "Add a Field line to Reflection.",
   },
   Print: {
-    prefix: "Print",
-    body: ['AZ_Printf("", "");'],
-    description: "Add a Print Line.",
+    // cpptools completes the AZ_Printf MACRO as bare text (autocompleteAddParentheses
+    // only fills real functions, not macros), so this snippet supplies the fillable
+    // call. Triggered by "Print" or "AZ_Printf"; tab stops for window + message.
+    prefix: ["Print", "AZ_Printf"],
+    body: ['AZ_Printf("${1:window}", "${2:message}");'],
+    description: "Add an AZ_Printf line.",
   },
   MaybeUnused: {
     prefix: "Maybe_Unused",
@@ -71,6 +79,16 @@ export const O3DE_SNIPPETS: Record<string, unknown> = {
   },
 };
 
+/** Scope each snippet to C/C++ (unless it already declares one) so it never leaks into other languages. */
+function scopedSnippets(): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(O3DE_SNIPPETS).map(([name, snippet]) => {
+      const entry = snippet as Record<string, unknown>;
+      return [name, entry.scope ? entry : { ...entry, scope: CPP_SCOPE }];
+    }),
+  );
+}
+
 /** Write the snippets into <project>/.vscode/ if not already present. Returns true if written. */
 export function writeSnippetsIfAbsent(projectPath: string): boolean {
   const dir = path.join(projectPath, ".vscode");
@@ -79,6 +97,6 @@ export function writeSnippetsIfAbsent(projectPath: string): boolean {
     return false; // never clobber a user-customized snippets file
   }
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(O3DE_SNIPPETS, null, 4)}\n`, "utf8");
+  fs.writeFileSync(file, `${JSON.stringify(scopedSnippets(), null, 4)}\n`, "utf8");
   return true;
 }

@@ -3,6 +3,84 @@
 All notable changes to the **O3DE Development Tools** extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.2] — Unreleased
+
+### Added
+
+- **Settings shortcut** — a gear button in the dashboard's Utilities row (and the **O3DE: Open Settings**
+  command) opens VS Code Settings filtered to just this extension's settings.
+- **Advanced view + CMake configure flags** — a new **Advanced** tab (below the Lua Palette) manages
+  extra CMake cache variables passed to Configure. Curated toggles for the common ones (RenderDoc
+  `LY_RENDERDOC_ENABLED`, `CMAKE_OBJECT_PATH_MAX`) plus a generic add/edit/remove list for any
+  `-D VAR=value`. Flags are stored per-project in `o3de.cmake.configureArgs` (`.vscode/settings.json`);
+  editing only updates the setting, and an **Apply (Reconfigure)** button pushes them into CMakeCache. A
+  "reconfigure pending" hint shows when the stored flags differ from the cache. (#18)
+- **MCP run tools** — the LLM/MCP endpoint gains **`o3de_is_running`** (detect whether the Editor /
+  GameLauncher is up *without* building — a running Editor locks gem DLLs and fails the link) and
+  **`o3de_run`** (launch the selected run target detached, for a build-and-run flow; never
+  force-closes a running app). A third, **`o3de_force_close`**, is **off by default** and gated by the
+  new `o3de.llm.allowForceClose` setting; when enabled it is marked *destructive* so the client asks
+  for approval before every call. Intended flow: `o3de_is_running` → ask the user → `o3de_force_close`
+  → `o3de_build` → `o3de_run`. (#19, #20)
+- **Per-project opt-in (`o3de.enabled`)** — O3DE Tools' automatic behavior (C++/Lua IntelliSense,
+  the run-state watcher, MCP auto-start, the Visual Studio check) now runs **only** in projects you
+  enable. A non-O3DE workspace (e.g. web development) stays fully dormant — no providers, no MCP, no
+  toolchain alerts, no prompt. Opening an O3DE project offers a one-time **"Enable O3DE Tools for
+  this project?"** prompt (Enable / Not now / Never); the choice is stored per folder in
+  `.vscode/settings.json`. Enabling starts the machinery live (no reload). New commands
+  **O3DE: Enable / Disable Tools for this Project**, and a new **Required** onboarding row shows the
+  per-project state with an Enable/Disable button.
+
+### Changed
+
+- **Run is now a toggle** — pressing **O3DE: Run** (or its `Ctrl+Alt+R` hotkey) while an app is already
+  running force-quits it instead of erroring — the Editor can't run twice, so one key now launches on
+  demand and quits on demand. Running state is detected robustly (tracked launches and apps started
+  outside the extension). Gated by the new `o3de.run.toggleToQuit` setting (on by default; turn off to
+  make Run only ever launch). (#17)
+- **The Class Wizard terminal now closes with its window** — launching the Class Creation Wizard left
+  its terminal orphaned in the panel after you closed the wizard. The terminal now exits (and VS Code
+  disposes it) when the wizard window closes; a launch error still leaves it open so the failure is
+  visible. (#15)
+
+### Changed
+
+- **Function completions now insert their parentheses** — accepting a function suggestion inserts
+  `name(args)` with the cursor/placeholders inside the parens instead of just the bare name, in both Lua
+  (`Lua.completion.callSnippet: Replace`) and C++ (`C_Cpp.autocompleteAddParentheses: true`). Written into
+  the generated project settings; re-run Generate Lua IntelliSense / Write Workspace Settings, or add the
+  settings, to pick it up. (cpptools can't add parens to function-like **macros** like `AZ_Printf` — so the
+  `AZ_Printf`/`Print` snippet now carries the fillable call with tab stops instead.)
+
+### Fixed
+
+- **Lua IntelliSense now actually loads the O3DE API** — the generated stub file is several megabytes,
+  but LuaLS silently skips any file larger than `Lua.workspace.preloadFileSize` (default 500 KB), so the
+  O3DE symbols (`log`, `Print`, classes, EBuses) never completed. Generate Lua IntelliSense now writes a
+  `Lua.workspace.preloadFileSize` sized to the stub (never lowering a larger user value). Re-run Generate
+  Lua IntelliSense (or add the setting) to pick it up.
+- **C++ snippets no longer leak into `.lua` (and other) files** — the deployed `O3DEDevSnippets`
+  (e.g. the `AZ_Printf` "Print" snippet) had no language `scope`, so VS Code offered these C++ patterns in
+  every file, including Lua. They are now scoped to `cpp,c` on write. Existing snippet files aren't
+  overwritten — delete `<project>/.vscode/O3DEDevSnippets.code-snippets` and re-run Write Workspace
+  Settings to refresh, or add `"scope": "cpp,c"` to each snippet. (#6)
+- **LLM/MCP is now per-project, not global** — `o3de.llm.enabled` was written at global scope, so
+  enabling MCP on one project turned it on in every window and wrote `.mcp.json` into unrelated
+  folders. It is now folder-scoped, and MCP starts only when the project is both enabled and has LLM
+  connections on. (#21)
+
+- **Add Gems / Folders no longer reconfigures the project** — the action now adds the picked
+  gem(s)/folder(s) to the live workspace via VS Code's native folder API (identical to
+  File > "Add Folder to Workspace"). It previously rewrote the whole `.code-workspace` on disk and
+  demanded a window reload, which broke the C++ config and forced a re-run of Set Up Workspace that
+  dropped the gem folder again -- an infinite loop. Adding a gem for reference is now a pure
+  workspace mutation: no `.code-workspace` surgery, no reload, no CMake, no `.vscode` config changes.
+  (#22)
+- **"Show built-in gems" now actually lists them** — the toggle read only the user manifest's
+  registered gems, none of which live inside an engine, so it revealed nothing. The picker now also
+  discovers each registered engine's built-in gems from its `engine.json` (`external_subdirectories`),
+  deduped against the user gems, so toggling reveals the full engine gem set (~100+ per engine).
+
 ## [0.1.1] — 2026-07-10
 
 A UX v2 pass that reorganizes the dashboard around how the tools are actually used, plus new

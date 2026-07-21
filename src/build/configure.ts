@@ -56,6 +56,21 @@ export function isConfiguredFor(project: O3deProject, generator: string): boolea
   return readCachedGenerator(projectBuildDir(project.path)) === generator;
 }
 
+// ---- Advanced-tab extra CMake cache flags ----------------------------------
+/** The user's extra `-D` cache flags for a project (Advanced tab: o3de.cmake.configureArgs). */
+export function readConfigureArgs(projectPath: string): Record<string, string> {
+  const raw = vscode.workspace
+    .getConfiguration("o3de", vscode.Uri.file(projectPath))
+    .get<Record<string, unknown>>("cmake.configureArgs", {});
+  const args: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    if (key.trim() !== "" && value !== null && value !== undefined) {
+      args[key] = String(value);
+    }
+  }
+  return args;
+}
+
 // ---- File API query --------------------------------------------------------
 /** Ask CMake to emit a File API reply for this build tree at next configure. */
 function writeFileApiQuery(buildDir: string): void {
@@ -145,6 +160,7 @@ export async function configureProject(options: BuildOptions): Promise<void> {
       generator: options.generator,
       thirdPartyPath,
       compiler: options.compiler,
+      extraCacheArgs: readConfigureArgs(project.path),
     }),
   );
 

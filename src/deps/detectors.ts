@@ -16,6 +16,7 @@ import { findNinja } from "../build/ninja";
 import { readManifest } from "../o3de/manifest";
 import { discoverEngines } from "../o3de/discovery";
 import { readProject, readEngine } from "../o3de/identity";
+import { isO3deWorkspace, primaryO3deFolder, enableStateForFolder } from "../workspace/projectScope";
 import { llmConnectionStatus } from "../mcp/server";
 
 export type CheckState = "ok" | "missing" | "warn" | "absent" | "unknown";
@@ -123,6 +124,25 @@ export function detectProject(): CheckResult {
     .map((f) => readProject(f.uri.fsPath))
     .find((p) => p !== undefined);
   return project ? { state: "ok", detail: project.projectName } : { state: "missing" };
+}
+
+// Whether O3DE Tools is opted in for this project (per-project o3de.enabled).
+export function detectProjectEnabled(): CheckResult {
+  if (!isO3deWorkspace()) {
+    return { state: "unknown" };
+  }
+  const folder = primaryO3deFolder();
+  if (!folder) {
+    return { state: "unknown" };
+  }
+  switch (enableStateForFolder(folder)) {
+    case "enabled":
+      return { state: "ok", detail: "opted in" };
+    case "never":
+      return { state: "missing", detail: "disabled for this project" };
+    default:
+      return { state: "missing", detail: "not enabled yet" };
+  }
 }
 
 export function detectThirdParty(): CheckResult {

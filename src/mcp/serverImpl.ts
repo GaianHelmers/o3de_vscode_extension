@@ -9,7 +9,8 @@
 //  HTTP with session routing. A client's `initialize` mints a session id; the
 //  client echoes it (mcp-session-id header) on every later request and we route
 //  it to that session's transport. Every request must carry the bearer token.
-//  Tools: o3de_ping (health) and o3de_build (headless build + structured report).
+//  Tools: health (o3de_ping), build (o3de_build + _status/_log), run
+//  (o3de_is_running, o3de_run), and config (o3de_get/set_config, o3de_list_targets).
 // ============================================================================
 
 import * as http from "http";
@@ -19,10 +20,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { log } from "../log";
-import { BuildOptions, BuildConfig } from "../build/buildOptions";
+import { BuildOptions, BuildConfig, RunTarget } from "../build/buildOptions";
 import { startBuildJob, getBuildJob } from "../build/buildJobs";
 import { BuildResult } from "../build/buildOutput";
 import { configSnapshot, applyConfig, listTargets } from "../build/configQuery";
+import { runStatus, launchRunTarget, forceCloseRuntime } from "../build/runQuery";
 
 const MCP_PATH = "/mcp";
 const HOST = "127.0.0.1";
@@ -41,6 +43,7 @@ export interface McpHttpOptions {
   port: number;
   token: string;
   requireToken: boolean; // when false, the localhost bind is the only gate (no 401 → no OAuth cascade)
+  allowForceClose: boolean; // expose the destructive o3de_force_close tool (opt-in)
   version: string;
   buildOptions: BuildOptions;
 }
@@ -316,6 +319,93 @@ function buildMcpServer(opts: McpHttpOptions): McpServer {
       return buildResultContent(job.result);
     },
   );
+
+  // ---- Run: is-running probe + launch (no force-close) ---------------------
+  server.registerTool(
+    "o3de_is_running",
+    {
+      title: "O3DE Is Running",
+      description:
+        "Check whether the O3DE Editor or GameLauncher is currently running for the workspace project — WITHOUT " +
+        "building. A running Editor locks the gem DLLs, so o3de_build fails the link with blocked:editor-running; " +
+        "call this first to know the app's state (and after o3de_run to confirm it came up). Detects both apps this " +
+        "extension launched and any started outside it (tasklist). Returns running true/false plus the images checked.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const status = await runStatus(opts.buildOptions);
+      const line = status.note
+        ? status.note
+        : status.running
+          ? `Running (${status.trackedLabel ?? status.images.join(", ")})`
+          : "Not running";
+      return { content: [txt(line), txt(JSON.stringify(status, null, 2))] };
+    },
+  );
+
+  server.registerTool(
+    "o3de_run",
+    {
+      title: "O3DE Run",
+      description:
+        "Launch the run target (Editor or GameLauncher) detached — the 'run' half of a build-and-run flow — using " +
+        "the O3DE panel's run target, config, and launch args unless overridden. Returns IMMEDIATELY once launched " +
+        "(it does not block); use o3de_is_running to confirm it is up. The exe must be built first (o3de_build the " +
+        "run target). If an app is already running for the project it is left alone (alreadyRunning) — this tool " +
+        "never force-closes a running app; stopping stays a user action in the O3DE panel. Windows/MSVC only.",
+      inputSchema: {
+        target: z
+          .enum(["Editor", "GameLauncher"])
+          .optional()
+          .describe("Run target to launch. Omit to use the panel selection."),
+        config: z
+          .enum(["profile", "debug", "release"])
+          .optional()
+          .describe("Build config to run. Omit to use the panel selection."),
+      },
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async (args: { target?: RunTarget; config?: BuildConfig }) => {
+      const result = launchRunTarget(opts.buildOptions, { target: args.target, config: args.config });
+      const line = result.launched
+        ? `Launched ${result.target} (${result.config}, pid ${result.pid}).`
+        : result.alreadyRunning
+          ? `${result.target} already running — left alone.`
+          : `Did not launch: ${result.reason}`;
+      return {
+        content: [txt(line), txt(JSON.stringify(result, null, 2))],
+        // alreadyRunning is a valid, non-error outcome; only a genuine failure is an error.
+        isError: !result.launched && !result.alreadyRunning,
+      };
+    },
+  );
+
+  // Force-close is DESTRUCTIVE and opt-in: registered only when the user has set
+  // o3de.llm.allowForceClose, and annotated destructive so the client asks before
+  // every call. Intended flow: o3de_is_running -> (ask the user) -> o3de_force_close
+  // -> o3de_build -> o3de_run. It kills the Editor/AssetProcessor that lock gem DLLs.
+  if (opts.allowForceClose) {
+    server.registerTool(
+      "o3de_force_close",
+      {
+        title: "O3DE Force-Close App",
+        description:
+          "Force-quit the O3DE runtime (Editor, GameLauncher, AssetProcessor, ScriptCanvas) for the workspace " +
+          "project — so a build can link when a running Editor is holding gem DLLs. DESTRUCTIVE: it kills the apps " +
+          "and their child process trees, losing any unsaved Editor work. Always ask the user for explicit " +
+          "permission before calling this. Typical flow: o3de_is_running -> confirm with the user -> o3de_force_close " +
+          "-> o3de_build -> o3de_run. Windows only.",
+        inputSchema: {},
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      },
+      async () => {
+        const result = await forceCloseRuntime();
+        const line = result.note ?? `Force-closed O3DE runtime${result.closedTracked ? " (tracked app + tree)" : ""}.`;
+        return { content: [txt(line), txt(JSON.stringify(result, null, 2))] };
+      },
+    );
+  }
 
   // ---- Config get / set + target discovery ---------------------------------
   server.registerTool(

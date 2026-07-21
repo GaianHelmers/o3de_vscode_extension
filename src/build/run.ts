@@ -26,7 +26,8 @@ function resolveEditorExe(project: O3deProject, config: string): string {
   return candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
 }
 
-function resolveRunnable(project: O3deProject, target: RunTarget, config: string): string {
+/** Resolve the exe to launch for a run target (SDK engine → engine prebuilt; source → project build). */
+export function resolveRunnable(project: O3deProject, target: RunTarget, config: string): string {
   return target === "Editor"
     ? resolveEditorExe(project, config)
     : projectRuntimeExe(project.path, config, gameLauncherExeName(project.projectName));

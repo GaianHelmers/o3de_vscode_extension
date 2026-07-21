@@ -37,11 +37,14 @@ export function liveEndpointPort(): number | undefined {
 export type LlmConnectionState = "off" | "incomplete" | "on";
 
 export function llmConnectionStatus(): { state: LlmConnectionState; port?: number; hasConfig: boolean } {
-  const enabled = vscode.workspace.getConfiguration("o3de").get<boolean>("llm.enabled", false);
+  const root = projectRoot();
+  // llm.enabled is per-project (folder-scoped) -> read it against the project root.
+  const enabled = vscode.workspace
+    .getConfiguration("o3de", root ? vscode.Uri.file(root) : undefined)
+    .get<boolean>("llm.enabled", false);
   if (!enabled) {
     return { state: "off", hasConfig: false };
   }
-  const root = projectRoot();
   const hasConfig = root ? hasMcpServerEntry(root) : false;
   if (livePort !== undefined && hasConfig) {
     return { state: "on", port: livePort, hasConfig };
@@ -91,6 +94,7 @@ export class O3deMcpServer {
         port,
         token: this.token,
         requireToken: requireToken(),
+        allowForceClose: allowForceClose(),
         version,
         buildOptions: this.buildOptions,
       });
@@ -227,6 +231,18 @@ function projectIdentity(): string {
 
 function requireToken(): boolean {
   return vscode.workspace.getConfiguration("o3de").get<boolean>("llm.requireToken", false);
+}
+
+// Whether the destructive o3de_force_close tool is exposed at all. OFF by default:
+// the assistant cannot close a running Editor unless the user opts in, and even
+// then the tool is marked destructive so the client asks before every call.
+function allowForceClose(): boolean {
+  // Folder-scoped -> read against the project root so a value in the project's
+  // .vscode/settings.json is honored (not just the workspace-level value).
+  const root = projectRoot();
+  return vscode.workspace
+    .getConfiguration("o3de", root ? vscode.Uri.file(root) : undefined)
+    .get<boolean>("llm.allowForceClose", false);
 }
 
 function writeConfigEnabled(): boolean {

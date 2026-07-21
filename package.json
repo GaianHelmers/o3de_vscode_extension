@@ -2,7 +2,7 @@
   "name": "o3de-development-tools",
   "displayName": "O3DE Development Tools",
   "description": "Developer companion for Open 3D Engine (O3DE): guided workspace setup, one-click CMake build & run, and C++ IntelliSense — for VS Code on Windows.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "icon": "media/icon.png",
   "publisher": "GenomeStudiosInc",
   "license": "MIT",
@@ -26,15 +26,38 @@
     "configuration": {
       "title": "O3DE Development Tools",
       "properties": {
+        "o3de.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "**Enable O3DE Tools for this project.** Per-project opt-in: the extension's automatic behavior (C++/Lua IntelliSense, the run-state watcher, MCP auto-start) runs only in projects where this is `true`. Stored per folder in `.vscode/settings.json`, so a non-O3DE workspace (e.g. web development) is never affected. Set it from the one-time prompt, the Onboarding ▸ Required row, or **O3DE: Enable Tools for this Project**."
+        },
         "o3de.intellisense.autoRefreshOnStartup": {
           "type": "boolean",
           "default": true,
+          "scope": "resource",
           "markdownDescription": "On activation, regenerate C++ IntelliSense (`c_cpp_properties.json`) from the latest CMake File API reply. Low cost — re-parses the existing reply, does **not** run a CMake configure. Turn off to update only via the **O3DE: Generate C++ IntelliSense** command."
+        },
+        "o3de.run.toggleToQuit": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Make **O3DE: Run** (and its `Ctrl+Alt+R` hotkey) a toggle: when an O3DE app is already running, pressing Run **force-quits** it instead of trying to launch a second one (the Editor can't run twice) — one key to launch on demand and quit on demand. Turn **off** to make Run only ever launch (it will offer to restart if something is already running)."
+        },
+        "o3de.cmake.configureArgs": {
+          "type": "object",
+          "default": {},
+          "scope": "resource",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra CMake **cache variables** passed to **O3DE: Configure Project** as `-D<name>=<value>` (e.g. `LY_RENDERDOC_ENABLED: \"ON\"`, `CMAKE_OBJECT_PATH_MAX: \"1000\"`). Managed by the **Advanced** tab, but editable here. Changes apply on the next Configure (CMake caches them in `CMakeCache.txt`)."
         },
         "o3de.llm.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "**Allow LLM connections.** Expose a local [MCP](https://modelcontextprotocol.io) endpoint on `127.0.0.1` so an assistant like Claude can trigger builds and read back structured results — no rebuilt scripts. **Off by default**; the endpoint binds to localhost only. Run **O3DE: Show LLM Connection Info** for the client config. Toggle from the Onboarding ▸ Optional section."
+          "scope": "resource",
+          "markdownDescription": "**Allow LLM connections.** Expose a local [MCP](https://modelcontextprotocol.io) endpoint on `127.0.0.1` so an assistant like Claude can trigger builds and read back structured results — no rebuilt scripts. **Off by default**; the endpoint binds to localhost only. Per-project (stored in `.vscode/settings.json`) so enabling it on one project does not affect others. Run **O3DE: Show LLM Connection Info** for the client config. Toggle from the Onboarding ▸ Optional section."
         },
         "o3de.llm.port": {
           "type": "number",
@@ -45,6 +68,12 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Require a bearer token on the LLM (MCP) endpoint. **Off by default** — the endpoint is bound to `127.0.0.1` (local only), and some MCP clients mishandle a token by falling into an OAuth flow. Turn on only if you want the extra gate and your client sends the `Authorization` header from its config."
+        },
+        "o3de.llm.allowForceClose": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "Expose the destructive **`o3de_force_close`** MCP tool, which lets an assistant force-quit the running Editor / GameLauncher / AssetProcessor (e.g. to unblock a build that a running Editor is holding gem DLLs for). **Off by default** so the assistant can never close your Editor unless you opt in — and even when on, the tool is marked *destructive* so your client asks for approval before every call. Leave off to keep force-close a manual action (the O3DE panel's Stop)."
         },
         "o3de.llm.writeMcpConfig": {
           "type": "boolean",
@@ -77,6 +106,13 @@
           "type": "webview",
           "visibility": "collapsed",
           "size": 100
+        },
+        {
+          "id": "o3de.advanced",
+          "name": "Advanced",
+          "type": "webview",
+          "visibility": "collapsed",
+          "size": 1
         }
       ]
     },
@@ -89,6 +125,11 @@
         "command": "o3de.showLog",
         "title": "O3DE: Show Log",
         "icon": "$(output)"
+      },
+      {
+        "command": "o3de.openSettings",
+        "title": "O3DE: Open Settings",
+        "icon": "$(gear)"
       },
       {
         "command": "o3de.showEditorLog",
@@ -114,6 +155,14 @@
       {
         "command": "o3de.setupWorkspace",
         "title": "O3DE: Set Up Workspace…"
+      },
+      {
+        "command": "o3de.enableForProject",
+        "title": "O3DE: Enable Tools for this Project"
+      },
+      {
+        "command": "o3de.disableForProject",
+        "title": "O3DE: Disable Tools for this Project"
       },
       {
         "command": "o3de.addGems",

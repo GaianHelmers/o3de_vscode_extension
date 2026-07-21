@@ -60,9 +60,16 @@ export async function launchClassWizard(): Promise<void> {
   // bootstrap output is visible in a tab and no stray cmd.exe window pops up.
   // Pin cmd.exe on Windows: python.cmd is a batch file and the default terminal
   // may be PowerShell, which needs `&` to run a quoted path; cmd runs it directly.
-  const command = formatCommand([python, script, "--engine-path", engine.path, "--project-path", projectPath]);
+  const base = formatCommand([python, script, "--engine-path", engine.path, "--project-path", projectPath]);
   const shellPath = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : undefined;
-  log().info(`Launching Class Wizard (${engine.engineName}): ${command}`);
+  log().info(`Launching Class Wizard (${engine.engineName}): ${base}`);
+
+  // Auto-close this terminal when the wizard WINDOW closes: the launcher blocks
+  // until the GUI exits, so we chain an `exit` to terminate the shell on a clean
+  // exit — VS Code then disposes the otherwise-orphaned terminal. `call` on
+  // Windows so the .cmd's exit code reaches `&&`; an error exit leaves the
+  // terminal open so the failure stays visible.
+  const command = process.platform === "win32" ? `call ${base} && exit` : `${base} && exit`;
 
   const terminal = freshTerminal("O3DE Class Wizard", undefined, shellPath);
   terminal.show();

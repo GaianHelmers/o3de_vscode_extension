@@ -24,6 +24,7 @@ export interface O3deEngine {
   version?: string;
   displayVersion?: string;
   isSdkEngine: boolean; // sdk_engine === true → prebuilt, NO source vision
+  externalSubdirectories: string[]; // engine's built-in gem dirs, relative to the engine root
   path: string;
 }
 
@@ -71,6 +72,7 @@ export function parseEngine(json: Record<string, unknown>, dir: string): O3deEng
     version: typeof json.version === "string" ? json.version : undefined,
     displayVersion: typeof json.display_version === "string" ? json.display_version : undefined,
     isSdkEngine: json.sdk_engine === true,
+    externalSubdirectories: asStringArray(json.external_subdirectories),
     path: dir,
   };
 }

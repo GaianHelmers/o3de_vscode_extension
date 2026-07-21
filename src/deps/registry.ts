@@ -76,6 +76,22 @@ export const CHECKS: DependencyCheck[] = [
     detect: d.detectProject,
     action: { label: "Set Up Workspace…", kind: "command", payload: "o3de.setupWorkspace" },
   },
+  {
+    id: "projectEnabled",
+    label: "O3DE Tools enabled for this project",
+    what: "Per-project opt-in. O3DE Tools' automatic features (C++/Lua IntelliSense, the run-state watcher, MCP) run only in projects you enable here, so other workspaces (e.g. web development) are never affected. Stored in this project's .vscode/settings.json.",
+    category: "engine",
+    tier: "required",
+    track: "base",
+    detect: d.detectProjectEnabled,
+    action: { label: "Enable for this project", kind: "command", payload: "o3de.enableForProject" },
+    // Once enabled (green), the row offers a Disable button (opts back out).
+    rerun: {
+      label: "Disable",
+      confirm: "Disable O3DE Tools for this project? Automatic features stop; reload the window to fully unload the C++ providers.",
+      action: { label: "Disable", kind: "command", payload: "o3de.disableForProject" },
+    },
+  },
   // CPP — browse engine code, C++ IntelliSense, and the live build (component dev).
   {
     id: "sourceEngine",
